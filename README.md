@@ -39,6 +39,13 @@ Se abre en el navegador. En `deploy/` se incluye `build_portable_windows.ps1`, e
 script que **construye** un empaquetado portable para Windows (ejecutable sin
 instalación ni permisos de administrador) a partir del código.
 
+### Descargar el portable ya construido (doble clic)
+
+Si no quieres instalar nada, descarga el empaquetado portable desde la pestaña
+[**Releases**](https://github.com/josepcastell/planificador-turnos-tfm/releases):
+descomprime `PAC3_turnos_portable.zip` y haz doble clic en `run.bat`. Se entrega sin
+datos; la configuración se introduce desde la propia interfaz.
+
 ## Estructura del código
 
 | Carpeta | Responsabilidad |
