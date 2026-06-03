@@ -19,6 +19,10 @@ calendario.
 
 ## Requisitos e instalación
 
+Requiere **Python 3.11 o superior** (probado con Python 3.13). El entorno virtual
+(`.venv`) no forma parte del repositorio: cada persona crea el suyo con los
+comandos siguientes.
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -31,8 +35,9 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Se abre en el navegador. En `deploy/` hay además un empaquetado **portable para
-Windows** (ejecutable sin instalación ni permisos de administrador).
+Se abre en el navegador. En `deploy/` se incluye `build_portable_windows.ps1`, el
+script que **construye** un empaquetado portable para Windows (ejecutable sin
+instalación ni permisos de administrador) a partir del código.
 
 ## Estructura del código
 
@@ -45,7 +50,7 @@ Windows** (ejecutable sin instalación ni permisos de administrador).
 | `src/modules/`, `src/solver/` | Generación del calendario y modelo CP-SAT. |
 | `src/tools/` | Calendario base, capas de indisponibilidad, exportación a PDF/Excel. |
 | `tests/` | Prueba de humo de extremo a extremo. |
-| `deploy/` | Empaquetado portable para Windows. |
+| `deploy/` | Script para construir el empaquetado portable para Windows. |
 
 ## Prueba rápida
 
