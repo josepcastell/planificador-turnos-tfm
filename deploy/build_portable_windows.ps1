@@ -119,6 +119,12 @@ cd /d "%ROOT%app"
 set "STREAMLIT_BROWSER_GATHERUSAGESTATS=false"
 set "STREAMLIT_SERVER_PORT=8501"
 
+rem Dades autocontingudes DINS del paquet (sessions i PDFs). Aixi el portable
+rem s'obre BUIT i no llegeix mai sessions de l'escriptori de l'usuari.
+set "PAC3_SESSION_ROOT=%ROOT%dades\sessions"
+set "PAC3_PDF_OUTPUT_DIR=%ROOT%dades\PDFs"
+set "PAC3_DESKTOP_DIR=%ROOT%dades\PDFs"
+
 rem Evita la pregunta de l'email al primer arrencada de Streamlit.
 if not exist "%USERPROFILE%\.streamlit\credentials.toml" (
   if not exist "%USERPROFILE%\.streamlit" mkdir "%USERPROFILE%\.streamlit"
