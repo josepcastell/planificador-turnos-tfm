@@ -1,0 +1,827 @@
+import streamlit as st
+import os
+from pathlib import Path
+from datetime import date, datetime
+
+import pandas as pd
+from src.domain.constants import (
+    CARRY_FORWARD_SESSION_FILES,
+)
+from src.services.planner_inputs import load_planner_inputs
+from src.services.slot_catalog import (
+    review_slot_ids,
+    seed_slot_catalog_if_missing,
+    slot_area_map,
+    slot_metric_family_map,
+    weekday_slot_ids,
+)
+from src.domain.schedule_format import (
+    set_slot_area_overrides,
+    set_slot_metric_overrides,
+    set_slot_review_overrides,
+)
+from src.ui.eligibility_editor import render_eligibility_editor
+from src.ui.holiday_editor import render_holidays_editor
+from src.ui.input_editors import (
+    render_absences_editor,
+    render_allowed_areas_editor,
+    render_comite_editor,
+    render_doubled_machines_section,
+    render_guards_editor,
+    render_no_pres_weekdays_editor,
+    render_pres_weekdays_editor,
+    render_professionals_editor,
+)
+from src.ui.input_save_controls import save_pending_input_drafts
+from src.ui.metrics_tab import (
+    render_weekday_metrics,
+)
+from src.ui.planning_calendar_tabs import (
+    render_weekday_planning_tab,
+)
+from src.ui.planning_scope_controls import (
+    render_weekday_scope_controls,
+    weekday_scope_values,
+)
+from src.ui.session_sidebar import render_session_sidebar_actions
+from src.ui.slot_catalog_editor import render_slot_catalog_editor
+from src.ui.machines_editors import (
+    render_machines_locations_editor,
+    render_fixed_machines_editor,
+)
+from src.ui.styles import apply_global_styles
+from src.ui.comodi_editor import render_comodi_editor
+from src.ui.peonada_cap_editor import render_peonada_cap_editor
+from src.ui.quick_add_panels import render_quick_add_panels
+from src.ui.restriction_warnings import (
+    warn_absences_vs_initial,
+    warn_eligibility_vs_initial,
+    warn_guards_vs_initial,
+    warn_no_pres_weekday_vs_initial,
+    warn_pres_weekday_vs_initial,
+)
+from src.ui.schedule_changes_editor import render_schedule_changes_editor
+from src.ui.weekday_slot_editor import (
+    render_weekday_punctual_overrides_editor,
+    render_weekday_work_slot_editor,
+)
+from src.ui.planning_rules_editor import render_planning_rules_editor
+from src.ui.workflow_state import (
+    init_workflow_state,
+    invalidate_after_work_slot_change,
+    set_workflow_state,
+)
+from src.services import session_store
+
+st.set_page_config(page_title="Planificador de torns", layout="wide")
+
+apply_global_styles()
+
+DEFAULT_YEAR = 2026
+DEFAULT_MONTH = 1
+
+
+def default_app_folder(env_key: str, folder_name: str) -> Path:
+    configured = os.environ.get(env_key)
+    if configured:
+        return Path(configured).expanduser()
+
+    for env_var in ("USERPROFILE", "HOME"):
+        env_path = os.environ.get(env_var)
+        if not env_path:
+            continue
+        desktop = Path(env_path).expanduser() / "Desktop"
+        if desktop.exists():
+            return desktop / folder_name
+
+    wsl_users_root = Path("/mnt/c/Users")
+    if wsl_users_root.exists():
+        ignored_names = {"All Users", "Default", "Default User", "Public"}
+        for desktop in sorted(wsl_users_root.glob("*/Desktop")):
+            if desktop.parent.name not in ignored_names and desktop.exists():
+                return desktop / folder_name
+
+    return Path.cwd() / folder_name
+
+
+PDF_OUTPUT_DIR = default_app_folder("PAC3_PDF_OUTPUT_DIR", "Planning_PDFs")
+# Carpeta per defecte on l'usuari guarda els PDF: l'escriptori.
+DESKTOP_DIR = default_app_folder("PAC3_DESKTOP_DIR", "")
+DEFAULT_SESSION_ROOT = default_app_folder("PAC3_SESSION_ROOT", "Sessions_planificador")
+LAST_SESSION_PATH = DEFAULT_SESSION_ROOT / ".last_session"
+
+
+def read_last_session_name() -> str:
+    return session_store.read_last_session_name(LAST_SESSION_PATH, DEFAULT_SESSION_ROOT)
+
+
+def write_last_session_name(session_dir: Path) -> None:
+    session_store.write_last_session_name(session_dir, LAST_SESSION_PATH)
+
+
+def infer_section_year_from_session_name(session_name: str) -> tuple[str, int]:
+    return session_store.infer_section_year_from_session_name(session_name, DEFAULT_YEAR)
+
+
+def seed_carry_forward_files_if_needed(session_dir: Path, source_root: Path | None = None) -> bool:
+    return session_store.seed_carry_forward_files_if_needed(
+        session_dir,
+        CARRY_FORWARD_SESSION_FILES,
+        source_root=source_root,
+    )
+
+
+def reset_year_sensitive_widget_state() -> None:
+    for key in [
+        "manual_calendar_day_main",
+        "weekday_quick_absence_day",
+        "processed_holidays_upload",
+        "official_holidays_draft",
+        "official_holidays_draft_signature",
+        "base_calendar_overrides_draft",
+        "base_calendar_overrides_draft_signature",
+    ]:
+        st.session_state.pop(key, None)
+
+
+def date_input_value_in_year(widget_key: str, selected_year: int, selected_month: int = 1) -> date:
+    fallback = date(selected_year, selected_month, 1)
+    value = st.session_state.get(widget_key, fallback)
+    if isinstance(value, datetime):
+        value = value.date()
+    if not isinstance(value, date) or value.year != selected_year:
+        st.session_state[widget_key] = fallback
+        return fallback
+    return value
+
+
+def save_session_folder(
+    session_dir: Path,
+    year: int,
+    month: int,
+    include_generated: bool = True,
+) -> int:
+    return session_store.save_session_folder(
+        session_dir,
+        year,
+        month,
+        st.session_state.get("section_name_for_manifest", ""),
+        LAST_SESSION_PATH,
+        PDF_OUTPUT_DIR,
+        include_generated=include_generated,
+    )
+
+
+def save_generated_session_folder(session_dir: Path, year: int, month: int) -> int:
+    return save_session_folder(session_dir, year, month, include_generated=True)
+
+
+def load_session_folder(session_dir: Path, year: int, month: int) -> int:
+    return session_store.load_session_folder(session_dir, year, month, PDF_OUTPUT_DIR)
+
+
+def delete_current_session_workspace(session_dir: Path, year: int, month: int) -> int:
+    return session_store.delete_current_session_workspace(session_dir, year, month, PDF_OUTPUT_DIR)
+
+
+def create_empty_session_folder(session_dir: Path, year: int, carry_forward_source: Path | None = None) -> None:
+    session_store.create_empty_session_folder(
+        session_dir,
+        year,
+        st.session_state.get("section_name_for_manifest", ""),
+        CARRY_FORWARD_SESSION_FILES,
+        carry_forward_source=carry_forward_source,
+    )
+
+
+init_workflow_state()
+
+DEFAULT_SESSION_ROOT.mkdir(parents=True, exist_ok=True)
+session_folders = session_store.list_session_folders(DEFAULT_SESSION_ROOT)
+session_options = [p.name for p in session_folders]
+last_session_name = read_last_session_name()
+last_session_dir = DEFAULT_SESSION_ROOT / last_session_name if last_session_name else None
+last_session_meta = session_store.read_session_metadata(last_session_dir) if last_session_dir else {}
+inferred_section, inferred_year = infer_section_year_from_session_name(last_session_name)
+initial_section = last_session_meta.get("section") or inferred_section
+try:
+    initial_year = int(last_session_meta.get("year", inferred_year))
+except ValueError:
+    initial_year = inferred_year
+
+st.sidebar.markdown(
+    """
+    <div class="planner-title">Planificador de torns</div>
+    """,
+    unsafe_allow_html=True,
+)
+st.session_state.setdefault("section_name_for_manifest", initial_section)
+# Traspassem el valor "pendent" al widget abans d'instanciar-lo (Streamlit
+# no permet escriure a la clau del widget un cop creat).
+_pending_section = st.session_state.pop("_pending_section_name", None)
+if _pending_section is not None:
+    st.session_state["section_name_for_manifest"] = _pending_section
+section_name = st.sidebar.text_input(
+    "Títol del calendari",
+    key="section_name_for_manifest",
+)
+year = st.sidebar.number_input("Any", min_value=2020, max_value=2100, value=initial_year, step=1)
+safe_section_name = "".join(
+    c if c.isalnum() or c in {"_", "-"} else "_"
+    for c in section_name.strip()
+).strip("_") or "Seccio"
+default_session_dir = DEFAULT_SESSION_ROOT / f"{safe_section_name}_{year}"
+default_session_name = default_session_dir.name
+selected_session = ""
+session_identity = f"{safe_section_name}_{year}"
+previous_session_identity = st.session_state.get("session_identity")
+is_app_boot = previous_session_identity is None
+session_identity_changed = previous_session_identity != session_identity
+preserve_working_state = is_app_boot and session_store.workspace_has_user_data(year)
+# Si veníem de l'estat "sense sessió" (eliminada l'última), només sortim
+# d'aquest estat quan l'usuari ha escrit un nou títol explícitament. La
+# detecció es fa abans del cicle d'identitat per evitar que es netegi
+# acabant la identitat reseteja.
+if st.session_state.get("no_active_session"):
+    if section_name.strip():
+        st.session_state.pop("no_active_session", None)
+    else:
+        st.warning(
+            "No hi ha cap sessió activa. Escriu un nom al camp **Títol del "
+            "calendari** (sidebar) i prem Enter per crear-ne una de nova."
+        )
+        st.stop()
+
+if session_identity_changed:
+    reset_year_sensitive_widget_state()
+    st.session_state["session_identity"] = session_identity
+
+# Si la identitat acaba de canviar (canvi de títol/any) i la sessió per
+# defecte d'aquesta nova identitat encara no existeix, la creem ARA perquè
+# el desplegable la pugui mostrar com a seleccionada des del primer cop.
+previous_year_session_dir = DEFAULT_SESSION_ROOT / f"{safe_section_name}_{year - 1}"
+_carry_pre = previous_year_session_dir if previous_year_session_dir.exists() else None
+if _carry_pre is None and last_session_dir and last_session_dir.exists() and last_session_dir != default_session_dir:
+    _carry_pre = last_session_dir
+if session_identity_changed and not default_session_dir.exists():
+    create_empty_session_folder(default_session_dir, year, carry_forward_source=_carry_pre)
+    if not preserve_working_state:
+        session_store.reset_current_workspace_for_new_session(year)
+        load_session_folder(default_session_dir, year, DEFAULT_MONTH)
+        set_workflow_state(False)
+    write_last_session_name(default_session_dir)
+    # Refresquem la llista per incloure la nova sessió al desplegable.
+    session_folders = session_store.list_session_folders(DEFAULT_SESSION_ROOT)
+    session_options = [p.name for p in session_folders]
+
+# Pre-omplim la selecció del desplegable amb la sessió per defecte de la
+# nova identitat (si es coneix). Així el desplegable mostra sempre la
+# sessió activa sense que l'usuari l'hagi de triar manualment.
+_selectbox_key = f"selected_saved_session_{session_identity}"
+if session_identity_changed and default_session_name in session_options:
+    st.session_state[_selectbox_key] = default_session_name
+
+if session_options:
+    default_selected_index = (
+        session_options.index(default_session_name)
+        if default_session_name in session_options
+        else 0
+    )
+    selected_session = st.sidebar.selectbox(
+        "Sessió activa",
+        session_options,
+        format_func=lambda value: value,
+        index=default_selected_index,
+        key=_selectbox_key,
+    )
+
+session_dir = DEFAULT_SESSION_ROOT / selected_session if selected_session else default_session_dir
+previous_year_session_dir = DEFAULT_SESSION_ROOT / f"{safe_section_name}_{year - 1}"
+carry_forward_source_dir = previous_year_session_dir if previous_year_session_dir.exists() else None
+if carry_forward_source_dir is None and last_session_dir and last_session_dir.exists() and last_session_dir != session_dir:
+    carry_forward_source_dir = last_session_dir
+
+# Càrrega de sessió: si la sessió activa difereix de la que estava
+# carregada al workspace, recarreguem.
+_loaded_key = "loaded_session_dir"
+_loaded_prev = st.session_state.get(_loaded_key)
+_loaded_now = str(session_dir)
+_session_changed = _loaded_prev != _loaded_now
+
+if not session_dir.exists():
+    # No existeix: la creem (és nova, o canvi de títol/any sense pre-existent).
+    create_empty_session_folder(session_dir, year, carry_forward_source=carry_forward_source_dir)
+    if not preserve_working_state:
+        session_store.reset_current_workspace_for_new_session(year)
+        load_session_folder(session_dir, year, DEFAULT_MONTH)
+        set_workflow_state(False)
+    write_last_session_name(session_dir)
+    # Pre-omplir el desplegable perquè la nova sessió hi aparegui com a
+    # seleccionada. El selectbox ja s'ha renderitzat amb opcions antigues
+    # (sense aquesta sessió), per això cal forçar una nova rerunada.
+    st.session_state[f"selected_saved_session_{session_identity}"] = default_session_name
+    st.session_state["loaded_session_dir"] = str(session_dir)
+    st.rerun()
+else:
+    # La sessió existeix. Si toca, sembrem dades de carry-forward (només per
+    # a la sessió per defecte del títol+any actuals).
+    if selected_session == default_session_name or not selected_session:
+        seed_carry_forward_files_if_needed(session_dir, carry_forward_source_dir)
+    # Carreguem si l'usuari ha canviat de sessió (selectbox) o si l'identitat
+    # ha canviat (títol/any). En boot amb workspace ja poblat, preservem.
+    needs_load = _session_changed and not preserve_working_state
+    if needs_load:
+        load_session_folder(session_dir, year, DEFAULT_MONTH)
+        write_last_session_name(session_dir)
+        set_workflow_state(False)
+        # Buidar drafts en memòria perquè els editors rellegeixin del disc.
+        from src.ui.session_keys import TAB_SESSION_KEYS as _TAB_KEYS_LOAD
+        for _keys in _TAB_KEYS_LOAD.values():
+            for _k in _keys:
+                st.session_state.pop(_k, None)
+
+# Registrem la sessió carregada per a la propera rerunada.
+st.session_state[_loaded_key] = _loaded_now
+
+planning_scope, month, selected_quarter, selected_semester, selected_months, display_month = (
+    weekday_scope_values(DEFAULT_MONTH)
+)
+scope_start_month = selected_months[0]
+scope_end_month = selected_months[-1]
+month = scope_start_month if planning_scope != "Mes seleccionat" else month
+
+base_calendar_path = Path(f"data/base_calendar_{year}.csv")
+unavailability_path = Path(f"data/derived/unavailability_{year}.csv")
+preassignments_reconciled_path = Path(f"data/derived/preassignments_weekday_{year}.csv")
+weekday_day_info_path = Path("data/weekday/day_info.csv")
+weekday_calendar_slots_path = Path("data/weekday/calendar_slots.csv")
+professionals_path = Path("data/professionals.csv")
+absences_path = Path("data/absences/assignments.csv")
+eligibility_path = Path("data/eligibility.csv")
+guards_path = Path("data/guards/assignments.csv")
+weekly_templates_path = Path("data/weekday/weekly_slot_templates.csv")
+slot_catalog_path = Path("data/slot_catalog.csv")
+
+public_holidays_path = Path(f"data/derived/public_holidays_{year}.csv")
+base_calendar_overrides_path = Path(f"data/base_calendar_overrides_{year}.csv")
+sidebar_actions = render_session_sidebar_actions(session_dir)
+
+if sidebar_actions.restore_clicked and sidebar_actions.selected_snapshot is not None:
+    restored = session_store.restore_session_snapshot(
+        sidebar_actions.selected_snapshot, session_dir, year, month, PDF_OUTPUT_DIR,
+    )
+    # Buidar drafts/cachés perquè els editors rellegeixin la versió restaurada.
+    from src.ui.session_keys import TAB_SESSION_KEYS as _TAB_KEYS_RESTORE
+    for _keys in _TAB_KEYS_RESTORE.values():
+        for _k in _keys:
+            st.session_state.pop(_k, None)
+    st.sidebar.success(
+        f"Versió {sidebar_actions.selected_snapshot.name} restaurada "
+        f"({restored} fitxers)"
+    )
+    st.rerun()
+
+if sidebar_actions.delete_session_clicked:
+    if session_store.delete_session_folder(session_dir):
+        # Reset workspace i drafts perquè la sessió eliminada no quedi
+        # repoblada per la memòria en cau.
+        session_store.reset_current_workspace_for_new_session(year)
+        from src.ui.session_keys import TAB_SESSION_KEYS as _TAB_KEYS_DEL
+        for _keys in _TAB_KEYS_DEL.values():
+            for _k in _keys:
+                st.session_state.pop(_k, None)
+        st.session_state.pop("loaded_session_dir", None)
+        st.session_state.pop(
+            f"selected_saved_session_{session_identity}", None,
+        )
+        st.session_state.pop("session_identity", None)
+        # Mirem si queden altres sessions: si en queda alguna, activem-ne
+        # la primera i actualitzem el títol perquè coincideixi. Si no en
+        # queda cap, marquem l'estat "sense sessió" per evitar la creació
+        # automàtica fins que l'usuari decideixi.
+        _remaining = [
+            p.name for p in session_store.list_session_folders(DEFAULT_SESSION_ROOT)
+        ]
+        if _remaining:
+            _new_section, _ = infer_section_year_from_session_name(_remaining[0])
+            if _new_section:
+                # Usem una clau pendent: el widget ja està instanciat en aquesta
+                # rerunada. La pròxima rerunada el text_input la consumirà.
+                st.session_state["_pending_section_name"] = _new_section
+            st.session_state.pop("no_active_session", None)
+            st.sidebar.success(f"Sessió «{session_dir.name}» eliminada")
+        else:
+            st.session_state["_pending_section_name"] = ""
+            st.session_state["no_active_session"] = True
+            st.sidebar.success(
+                f"Sessió «{session_dir.name}» eliminada. No queda cap sessió."
+            )
+        set_workflow_state(False)
+    else:
+        st.sidebar.warning("La sessió ja no existia al disc")
+    st.rerun()
+
+if sidebar_actions.cleanup_clicked:
+    deleted = delete_current_session_workspace(session_dir, year, month)
+    session_store.reset_current_workspace_for_new_session(year)
+    set_workflow_state(False)
+    # Buidar les llistes de Màquines i Llocs (i les seves caixes a la UI).
+    from src.services.machines_locations import save_machines as _sm, save_locations as _sl
+    _sm([])
+    _sl([])
+    # Buidar TOTS els drafts/cachés en memòria de les pestanyes principals
+    # (altrament podrien repoblar els fitxers que acabem de buidar).
+    from src.ui.session_keys import TAB_SESSION_KEYS as _TAB_KEYS
+    for _keys in _TAB_KEYS.values():
+        for _k in _keys:
+            st.session_state.pop(_k, None)
+    st.sidebar.success(f"Sessió netejada ({deleted} fitxers esborrats)")
+    st.rerun()
+
+slot_catalog_df = seed_slot_catalog_if_missing(
+    slot_catalog_path,
+    weekday_templates_path=weekly_templates_path,
+)
+# Si l'usuari està editant el catàleg en aquesta sessió i encara no ha
+# persistit a disc (autosave en curs, etc.), el DRAFT a session_state és
+# la font de veritat més recent. Tots els overrides (area, metric_family,
+# review) s'han de derivar del MATEIX df — abans `slot_catalog_df` (disc)
+# es feia servir per a area/metric/review i `_catalog_for_options` (draft
+# si existia) només per a `catalog_weekday_slots`. Resultat: si marcaves
+# REVISA_RM com a review al catàleg, l'override no s'actualitzava fins
+# que es persistia el draft a disc — i les mètriques continuaven sense
+# detectar la revisió. Ara unifiquem: tots usen el draft si està viu.
+_draft_catalog = st.session_state.get("slot_catalog_draft")
+_catalog_for_options = _draft_catalog if isinstance(_draft_catalog, pd.DataFrame) else slot_catalog_df
+set_slot_area_overrides(slot_area_map(_catalog_for_options))
+set_slot_metric_overrides(slot_metric_family_map(_catalog_for_options))
+set_slot_review_overrides(review_slot_ids(_catalog_for_options))
+catalog_weekday_slots = weekday_slot_ids(_catalog_for_options)
+planner_inputs = load_planner_inputs(
+    professionals_path,
+    weekly_templates_path,
+    eligibility_path,
+    catalog_weekday_slots=catalog_weekday_slots,
+)
+professionals_df = planner_inputs.professionals_df
+professional_options = planner_inputs.professional_options
+all_professional_options = planner_inputs.all_professional_options
+templates_df = planner_inputs.templates_df
+eligibility_slots_df = planner_inputs.eligibility_slots_df
+existing_slots = planner_inputs.existing_slots
+weekday_eligibility_slots = planner_inputs.weekday_eligibility_slots
+
+
+def _professional_options_from_draft(
+    weekday_fallback: list[str],
+) -> tuple[list[str], list[str]]:
+    """Prefer the live Facultatius draft over the saved CSV so dropdowns in
+    Elegibilitat reflect just-typed edits without an extra rerun lag."""
+    draft = st.session_state.get("base_professionals_draft")
+    if not isinstance(draft, pd.DataFrame) or "professional_id" not in draft.columns:
+        return weekday_fallback, sorted(set(weekday_fallback))
+    ids = draft["professional_id"].fillna("").astype(str).str.strip().str.upper()
+    wkd_mask = draft.get("dies_laborables", pd.Series(True, index=draft.index)).fillna(False).astype(bool)
+    valid = (ids != "") & (ids != "NONE")
+    weekday = sorted(set(ids[valid & wkd_mask].tolist()))
+    return weekday, sorted(set(weekday))
+
+
+professional_options, all_professional_options = (
+    _professional_options_from_draft(professional_options)
+)
+
+
+def save_current_pending_input_drafts(scope_key: str, selected_year: int) -> None:
+    save_pending_input_drafts(scope_key)
+
+
+st.header(section_name or "Planificador de torns")
+
+# Botó "Desar versió" a la dreta de la capçalera. Tots els canvis s'autodesen
+# al disc, però aquest botó crea una versió etiquetada al directori
+# `_snapshots/` que pots restaurar més tard des de la barra lateral.
+_save_col = st.columns([5, 1])[1]
+with _save_col:
+    if st.button(
+        "Desar versió",
+        width="stretch",
+        key="main_save_version_button",
+        help="Crea una còpia datada de la sessió actual a `_snapshots/`. "
+             "Es pot restaurar des de la barra lateral.",
+    ):
+        _snapshot_path = session_store.create_session_snapshot(session_dir)
+        if _snapshot_path is not None:
+            st.toast(
+                f"Versió {_snapshot_path.name} desada",
+                icon="✅",
+            )
+        else:
+            st.toast(
+                "No s'ha pogut desar la versió (la sessió no existeix encara).",
+                icon="⚠️",
+            )
+
+# L'àmbit del calendari (desplegable). Aquests valors s'usen a tot arreu.
+with st.expander("Àmbit del calendari", expanded=False):
+    (
+        planning_scope,
+        month,
+        selected_quarter,
+        selected_semester,
+        selected_months,
+        display_month,
+    ) = render_weekday_scope_controls(session_dir.name, year, DEFAULT_MONTH)
+scope_start_month = selected_months[0]
+scope_end_month = selected_months[-1]
+month = scope_start_month if planning_scope != "Mes seleccionat" else month
+
+(
+    slot_catalog_tab,
+    professionals_tab,
+    data_tab2,
+    weekday_calendar_tab,
+    final_metrics_tab,
+) = st.tabs([
+    "Activitat",
+    "Facultatius",
+    "Restriccions",
+    "Calendari",
+    "Mètriques",
+])
+
+with slot_catalog_tab:
+    # NOTA: el sostre de peonades (extraordinary_cap) s'edita ara a
+    # Mètriques i canvis finals › Altres restriccions › "Peonades màx./mes".
+
+    _machines_list, _locations_list = render_machines_locations_editor()
+    render_slot_catalog_editor(
+        slot_catalog_path,
+        weekday_templates_path=weekly_templates_path,
+        professional_options=all_professional_options,
+        machines=_machines_list,
+        locations=_locations_list,
+        year=year,
+    )
+
+with professionals_tab:
+    render_professionals_editor(
+        professionals_df,
+        professionals_path,
+        eligibility_path,
+        catalog_weekday_slots=catalog_weekday_slots,
+    )
+    # «Llocs on treballa cada facultatiu», «Slots que es doblen» i
+    # «Màquines fixes per facultatiu» viuen a la pestanya Restriccions.
+
+with data_tab2:
+    (
+        franges_subtab,
+        equilibri_subtab,
+        festius_subtab,
+        eligibility_subtab,
+        absences_subtab,
+        guards_subtab,
+        altres_subtab,
+    ) = st.tabs(
+        [
+            "Franges de treball",
+            "Regles d'equilibri setmanal",
+            "Festius",
+            "Elegibilitat",
+            "Absències",
+            "Guàrdies",
+            "Altres restriccions",
+        ]
+    )
+    with franges_subtab:
+        st.caption(
+            "**Com doblar una màquina**: afegeix-hi dues files per al "
+            "mateix (dia, franja, slot), una PRESENCIAL i una "
+            "NO_PRESENCIAL. El solver hi assignarà dos facultatius "
+            "diferents (el segon mostrat amb prefix **T-** si la NP es "
+            "flipa a PRES)."
+        )
+        template_overrides_path = Path(
+            f"data/weekday/template_overrides_{year}.csv"
+        )
+        # Filtrar slots de revisió: no s'assignen a cap franja (s'apliquen
+        # al dia sencer des del catàleg) i no compten com a màquina.
+        _review_ids = {
+            str(s).strip().upper()
+            for s in review_slot_ids(_catalog_for_options)
+        }
+        _existing_non_review = [
+            s for s in existing_slots
+            if str(s).strip().upper() not in _review_ids
+        ]
+        if not templates_df.empty and "slot_id" in templates_df.columns:
+            _templates_non_review = templates_df[
+                ~templates_df["slot_id"].fillna("").astype(str)
+                .str.strip().str.upper().isin(_review_ids)
+            ].copy()
+        else:
+            _templates_non_review = templates_df
+        render_weekday_work_slot_editor(
+            year,
+            display_month,
+            base_calendar_path,
+            public_holidays_path,
+            _templates_non_review,
+            _existing_non_review,
+            weekly_templates_path,
+            template_overrides_path,
+            invalidate_after_work_slot_change,
+        )
+        # Canvis puntuals del mes (overrides per a un mes/dia concret).
+        # Estructural: forma part del calendari INICIAL (els overrides
+        # es consoliden a la generació de templates abans del solver).
+        with st.expander("Canvis puntuals del mes", expanded=False):
+            st.caption(
+                "Modifica les franges per a un mes/dia concret. Aquests "
+                "canvis es consoliden al calendari abans del solver i "
+                "s'apliquen tant al calendari INICIAL com al DEFINITIU."
+            )
+            render_weekday_punctual_overrides_editor(
+                year,
+                display_month,
+                base_calendar_path,
+                public_holidays_path,
+                _templates_non_review,
+                _existing_non_review,
+                template_overrides_path,
+                invalidate_after_work_slot_change,
+            )
+    with equilibri_subtab:
+        render_planning_rules_editor(Path("data/planning_rules.csv"))
+    with festius_subtab:
+        render_holidays_editor(
+            year,
+            month,
+            public_holidays_path,
+            base_calendar_overrides_path,
+            date_input_value_in_year,
+        )
+    with eligibility_subtab:
+        st.caption(
+            "Restricció estructural: aplica al calendari INICIAL i al "
+            "DEFINITIU. Defineix quins facultatius poden cobrir cada "
+            "activitat (`allowed=0` bloqueja, `allowed=1` permet)."
+        )
+        render_eligibility_editor(
+            eligibility_path,
+            professional_options,
+            weekday_eligibility_slots,
+            "weekday",
+        )
+        warn_eligibility_vs_initial(eligibility_path)
+    with absences_subtab:
+        st.caption(
+            "Restricció estructural: aplica al calendari INICIAL i al "
+            "DEFINITIU. Bloqueja les assignacions del facultatiu als "
+            "dies indicats (vacances, permisos)."
+        )
+        render_absences_editor(
+            absences_path,
+            all_professional_options,
+            professionals_path=professionals_path,
+            eligibility_path=eligibility_path,
+            weekday_unavailability_path=Path("data/weekday/unavailability.csv"),
+        )
+        warn_absences_vs_initial(absences_path)
+    with guards_subtab:
+        st.caption(
+            "Assigna les guàrdies del mes i genera automàticament la "
+            "postguàrdia (bloqueja PRES de l'endemà)."
+        )
+        render_guards_editor(guards_path, all_professional_options)
+        warn_guards_vs_initial(guards_path)
+
+    with altres_subtab:
+        # Totes s'apliquen quan cliques Generar a Calendari.
+        with st.expander("Llocs on treballa cada facultatiu", expanded=False):
+            render_allowed_areas_editor(
+                professionals_path,
+                eligibility_path,
+            )
+        with st.expander("Comitès", expanded=False):
+            render_comite_editor(
+                professional_options=professional_options,
+                all_professional_options=all_professional_options,
+                catalog_weekday_slots=catalog_weekday_slots,
+            )
+        with st.expander("Comodí (fallback)", expanded=False):
+            render_comodi_editor(professionals_path)
+        render_fixed_machines_editor(slot_catalog_path, all_professional_options)
+        with st.expander("Màquines que es doblen per facultatiu", expanded=False):
+            render_doubled_machines_section(
+                professionals_path,
+                eligibility_path,
+                catalog_weekday_slots=catalog_weekday_slots,
+            )
+        with st.expander(
+            "Dies de la setmana no-presencials per facultatiu",
+            expanded=False,
+        ):
+            render_no_pres_weekdays_editor(
+                professionals_path, eligibility_path,
+            )
+            warn_no_pres_weekday_vs_initial(professionals_path)
+        with st.expander(
+            "Dies de la setmana presencials per facultatiu",
+            expanded=False,
+        ):
+            render_pres_weekdays_editor(
+                professionals_path, eligibility_path,
+            )
+            warn_pres_weekday_vs_initial(professionals_path)
+        with st.expander("Peonades/mes (jornada completa)", expanded=False):
+            render_peonada_cap_editor()
+        with st.expander("Canvi d'activitat (manual)", expanded=False):
+            st.caption(
+                "Edita una assignació concreta del calendari generat. El "
+                "canvi es desa com a preassignació; el solver la respectarà "
+                "a la pròxima Generació."
+            )
+            render_schedule_changes_editor(
+                year=year,
+                month=month,
+                selected_months=selected_months,
+                professional_options=professional_options,
+                all_professional_options=all_professional_options,
+            )
+
+with weekday_calendar_tab:
+    render_weekday_planning_tab(
+        year,
+        month,
+        selected_months,
+        display_month,
+        scope_start_month,
+        scope_end_month,
+        public_holidays_path,
+        base_calendar_overrides_path,
+        base_calendar_path,
+        absences_path,
+        guards_path,
+        professional_options,
+        session_dir,
+        save_current_pending_input_drafts,
+        save_session_folder,
+        save_generated_session_folder,
+        PDF_OUTPUT_DIR,
+        professionals_path,
+        DESKTOP_DIR,
+        all_professional_options=all_professional_options,
+    )
+    # (Els comptadors per facultatiu s'han mogut a la pestanya «Mètriques
+    # i canvis finals», dins un desplegable.)
+    # Ajustos ràpids sota el render. Absència/guàrdia escriuen a dades i es
+    # resolen amb «Reajustar (mínims canvis)»: el solver cobreix el forat
+    # conservant al màxim el calendari actual (no recomença de zero). Canvi
+    # puntual i ordinària↔peonada editen el calendari directament (a l'instant).
+    def _quick_reajustar(label: str) -> None:
+        """Reajust amb mínims canvis després d'afegir una absència/guàrdia:
+        parteix del calendari actual (estabilitat soft) i només mou el
+        necessari per cobrir el forat."""
+        from src.ui.planning_calendar_tabs import run_weekday_regenerate
+        run_weekday_regenerate(
+            label,
+            year, scope_start_month, scope_end_month, selected_months,
+            public_holidays_path, base_calendar_overrides_path,
+            base_calendar_path, session_dir, month,
+            save_generated_session_folder,
+            PDF_OUTPUT_DIR, professionals_path,
+        )
+        st.rerun()
+
+    render_quick_add_panels(
+        year,
+        month,
+        selected_months,
+        professional_options,
+        all_professional_options,
+        professionals_path,
+        PDF_OUTPUT_DIR,
+        absences_path,
+        guards_path,
+        reajustar=_quick_reajustar,
+    )
+
+with final_metrics_tab:
+    render_weekday_metrics(
+        year,
+        month,
+        scope_start_month,
+        scope_end_month,
+        selected_months,
+        public_holidays_path,
+        base_calendar_overrides_path,
+        base_calendar_path,
+        session_dir,
+        save_generated_session_folder,
+        PDF_OUTPUT_DIR,
+        professionals_path,
+    )
+
+st.stop()

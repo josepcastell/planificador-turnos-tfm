@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+streamlit.log
+*.log
+*.bak
+*.bak_*
+*.stable
+*.debugbak
+
+# Eines locals / dades sensibles (MAI s'han de publicar)
+.claude/
+tmp/
+_backup_pre_clean/
+data/uploads/
+data/raw/
+
+# Fitxers generats / derivats per any (es regeneren amb el codi)
+data/derived/
+data/base_calendar_[0-9]*.csv
+data/*/calendar_slots.csv
+data/*/day_info.csv
+data/weekday/template_overrides_*.csv
+
+# Preferència local de la vista (àmbit/mes seleccionat)
+data/calendar_view_settings.json
+
+# Outputs i snapshots generats
+outputs/
+snapshots/
