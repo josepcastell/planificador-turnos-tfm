@@ -7,7 +7,7 @@
   Crea una carpeta autonoma que NO necessita instal.lacio ni permisos
   d'administrador a l'ordinador de desti (la feina). Conte:
 
-    PAC3_turnos_portable\
+    Planner_portable\
       python\     Python 3.13 "embeddable" (no s'instal.la)
       app\        el codi de l'aplicacio (app.py, src, data, ...)
       run.bat     engegador (doble clic): obre l'app al navegador
@@ -39,7 +39,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 # El repo es la carpeta pare d'aquest script (deploy\..).
 $repo = Split-Path -Parent $PSScriptRoot
-$bundleName = 'PAC3_turnos_portable'
+$bundleName = 'Planner_portable'
 $bundle = Join-Path $OutDir $bundleName
 $pyDir  = Join-Path $bundle 'python'
 $appDir = Join-Path $bundle 'app'
@@ -133,7 +133,7 @@ if not exist "%USERPROFILE%\.streamlit\credentials.toml" (
 )
 
 echo.
-echo  PAC3_turnos s'esta obrint al navegador (http://localhost:8501)...
+echo  Planner s'esta obrint al navegador (http://localhost:8501)...
 echo  (No tanquis aquesta finestra mentre facis servir el programa.)
 echo.
 "%ROOT%python\python.exe" -m streamlit run app.py

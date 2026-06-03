@@ -43,7 +43,7 @@ instalación ni permisos de administrador) a partir del código.
 
 Si no quieres instalar nada, descarga el empaquetado portable desde la pestaña
 [**Releases**](https://github.com/josepcastell/planificador-turnos-tfm/releases):
-descomprime `PAC3_turnos_portable.zip` y haz doble clic en `run.bat`. Se entrega sin
+descomprime `Planner_portable.zip` y haz doble clic en `run.bat`. Se entrega sin
 datos; la configuración se introduce desde la propia interfaz.
 
 ## Estructura del código
