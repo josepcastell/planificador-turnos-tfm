@@ -151,7 +151,9 @@ if ($Zip) {
   $zipPath = "$bundle.zip"
   if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
   Write-Host "==> Comprimint a $zipPath ..."
-  Compress-Archive -Path $bundle -DestinationPath $zipPath
+  # Comprimim el CONTINGUT del bundle (no la carpeta) perque en extreure
+  # el .zip no quedi una carpeta dins d'una altra (doble nivell).
+  Compress-Archive -Path (Join-Path $bundle '*') -DestinationPath $zipPath
   Write-Host "==> Zip creat: $zipPath"
 }
 Write-Host ""
