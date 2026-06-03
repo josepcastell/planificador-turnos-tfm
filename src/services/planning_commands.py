@@ -88,7 +88,7 @@ def weekday_planning_step(
     Si `keep_restriction` es indicat, aplica NOMÉS aquella restricció
     (la resta s'esborren). S'usa pels botons per-desplegable.
     Si `max_seconds` es indicat, fixa el pressupost de temps del solver
-    per mes (PAC3_SOLVER_MAX_SECONDS) — més temps = més convergència."""
+    per mes (PLANNER_SOLVER_MAX_SECONDS) — més temps = més convergència."""
     args: list = [
         "src.tools.generate_planning_part",
         "weekday",

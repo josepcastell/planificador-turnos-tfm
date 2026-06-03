@@ -751,27 +751,27 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
 
     # ── Solve per trams ─────────────────────────────────────────────────────────
     # Cada tram és un Solve independent (CP-SAT no és incremental). El temps
-    # total (PAC3_SOLVER_MAX_SECONDS, per mes) es reparteix: el tram 2 és el
+    # total (PLANNER_SOLVER_MAX_SECONDS, per mes) es reparteix: el tram 2 és el
     # feixuc. Cada tram s'inicialitza (warm-start) amb la solució del tram
     # anterior, així el re-solve amb el tram superior bloquejat és molt ràpid.
-    # PAC3_SOLVER_TIER_SLACK: marge absolut en bloquejar un tram (0 = estricte).
+    # PLANNER_SOLVER_TIER_SLACK: marge absolut en bloquejar un tram (0 = estricte).
     solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = _solver_int_env("PAC3_SOLVER_WORKERS", 8)
+    solver.parameters.num_search_workers = _solver_int_env("PLANNER_SOLVER_WORKERS", 8)
     solver.parameters.random_seed = 42
-    # El temps de wall ≈ el pressupost (PAC3_SOLVER_MAX_SECONDS): CP-SAT no
+    # El temps de wall ≈ el pressupost (PLANNER_SOLVER_MAX_SECONDS): CP-SAT no
     # arriba a PROVAR l'optimalitat aquí, així que no para abans de l'hora.
     # Default 60s: el tier 4 (equitat ORD) és el feixuc i necessita marge per
     # baixar de FEASIBLE a OPTIMAL. Per màquines lentes pujar a 90-120s; per
     # màquines ràpides pots baixar a 30s. Les restriccions DURES (cap de
     # peonades, equitat de revisions, cobertura) es compleixen sempre,
     # independentment del temps de cerca.
-    total_budget = float(_solver_int_env("PAC3_SOLVER_MAX_SECONDS", 60))
+    total_budget = float(_solver_int_env("PLANNER_SOLVER_MAX_SECONDS", 60))
     # 4 trams (PRES, NP, equitat PRES, equitat ORD). Concentrem temps a
     # l'equitat ORD que sol acabar FEASIBLE (no OPTIMAL). El tier PRES
     # i NP són fàcils (objectiu 0 ja sortia a ~3s); donem-los menys.
     tier_budget_frac = (0.10, 0.15, 0.25, 0.50)
     try:
-        tier_slack = max(0, int(os.environ.get("PAC3_SOLVER_TIER_SLACK", "0")))
+        tier_slack = max(0, int(os.environ.get("PLANNER_SOLVER_TIER_SLACK", "0")))
     except (TypeError, ValueError):
         tier_slack = 0
 

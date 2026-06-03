@@ -58,7 +58,7 @@ def assert_pdf(path: Path) -> None:
 
 
 def smoke(project_root: Path, year: int, month: int, keep: bool) -> Path:
-    temp_root = Path(tempfile.mkdtemp(prefix="pac3_turnos_smoke_"))
+    temp_root = Path(tempfile.mkdtemp(prefix="planner_smoke_"))
     workdir = temp_root / "project"
     copy_project(project_root, workdir)
 

@@ -311,7 +311,7 @@ def parse_args():
         "--max-seconds", type=int, default=None,
         help="Pressupost de temps del solver per mes (segons). Més temps = "
              "més convergència (millor equilibri/peonades). Fixa "
-             "PAC3_SOLVER_MAX_SECONDS per a aquesta execució.",
+             "PLANNER_SOLVER_MAX_SECONDS per a aquesta execució.",
     )
     parser.add_argument(
         "--warm-start", action="store_true",
@@ -326,7 +326,7 @@ if __name__ == "__main__":
     import os
     args = parse_args()
     if args.max_seconds is not None and args.max_seconds > 0:
-        os.environ["PAC3_SOLVER_MAX_SECONDS"] = str(args.max_seconds)
+        os.environ["PLANNER_SOLVER_MAX_SECONDS"] = str(args.max_seconds)
     generate_weekday(
         args.year, args.start_month, args.end_month,
         stability_from=args.stability_from,

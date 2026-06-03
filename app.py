@@ -104,10 +104,10 @@ def default_app_folder(env_key: str, folder_name: str) -> Path:
     return Path.cwd() / folder_name
 
 
-PDF_OUTPUT_DIR = default_app_folder("PAC3_PDF_OUTPUT_DIR", "Planning_PDFs")
+PDF_OUTPUT_DIR = default_app_folder("PLANNER_PDF_OUTPUT_DIR", "Planning_PDFs")
 # Carpeta per defecte on l'usuari guarda els PDF: l'escriptori.
-DESKTOP_DIR = default_app_folder("PAC3_DESKTOP_DIR", "")
-DEFAULT_SESSION_ROOT = default_app_folder("PAC3_SESSION_ROOT", "Sessions_planificador")
+DESKTOP_DIR = default_app_folder("PLANNER_DESKTOP_DIR", "")
+DEFAULT_SESSION_ROOT = default_app_folder("PLANNER_SESSION_ROOT", "Sessions_planificador")
 LAST_SESSION_PATH = DEFAULT_SESSION_ROOT / ".last_session"
 
 
