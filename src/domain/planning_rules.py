@@ -15,8 +15,12 @@ from pathlib import Path
 import pandas as pd
 
 
-_DEFAULT_TARGET_MACHINES = {1: 1, 2: 1, 3: 2, 4: 3, 5: 4}
-_DEFAULT_TARGET_PRESENTIAL = {1: 0, 2: 1, 3: 1, 4: 2, 5: 3}
+# Default neutro: por cada tipo de semana (segun dias laborables), todos los
+# dias se planifican como PRESENCIALES y ninguno como no presencial
+# (target_presential == target_machines == active_days). La persona usuaria
+# ajusta estos valores en el editor de reglas de equilibrio segun su servicio.
+_DEFAULT_TARGET_MACHINES = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
+_DEFAULT_TARGET_PRESENTIAL = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
 
 _CSV_COLUMNS = ["active_days", "target_machines", "target_presential"]
 
