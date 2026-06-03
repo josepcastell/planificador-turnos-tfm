@@ -1,3 +1,4 @@
+import os
 import subprocess
 
 import streamlit as st
@@ -45,7 +46,14 @@ def run_steps_with_progress(steps, action_name: str, total_steps: int = 4, conta
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
+            # Forcem UTF-8 al subprocés i a la lectura: en Windows el codi
+            # del solver pot emetre caracters Unicode (p. ex. el simbol
+            # d'infinit) que la codificacio per defecte (cp1252) no sap
+            # codificar, i la generacio fallaria.
+            env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
         )
         if proc.stdout is not None:
             for line in proc.stdout:

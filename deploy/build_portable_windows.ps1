@@ -118,6 +118,11 @@ set "ROOT=%~dp0"
 cd /d "%ROOT%app"
 set "STREAMLIT_BROWSER_GATHERUSAGESTATS=false"
 set "STREAMLIT_SERVER_PORT=8501"
+rem Forca UTF-8 a tot el Python embegut: en Windows, la codificacio per
+rem defecte (cp1252) no sap codificar alguns caracters Unicode (p. ex. el
+rem simbol d'infinit) que el solver pot escriure als logs, i la generacio
+rem fallaria. Amb UTF-8 aixo no passa.
+set "PYTHONUTF8=1"
 
 rem Dades autocontingudes DINS del paquet (sessions i PDFs). Aixi el portable
 rem s'obre BUIT i no llegeix mai sessions de l'escriptori de l'usuari.
