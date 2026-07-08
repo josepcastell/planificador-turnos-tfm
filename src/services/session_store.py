@@ -435,6 +435,49 @@ def load_session_folder(session_dir: Path, year: int, month: int, pdf_output_dir
 SNAPSHOTS_DIRNAME = "_snapshots"
 
 
+def migrate_legacy_session_roots(current_root: Path, legacy_roots: list[Path]) -> int:
+    """Migració ÚNICA d'arrels de sessions antigues.
+
+    Versions anteriors del portable guardaven les sessions a l'escriptori
+    (Desktop/Sessions_planificador) o dins del paquet (dades/sessions,
+    variable PLANNER_SESSION_ROOT del run.bat antic). Si l'arrel ACTUAL no
+    té cap sessió i alguna arrel antiga sí, s'hi COPIEN (mai es mou ni
+    s'esborra l'original — queda com a còpia de seguretat). Sense això,
+    en actualitzar el programa l'usuari obre una app buida i creu que ha
+    perdut les dades. Retorna el nombre de sessions migrades."""
+    try:
+        has_current = current_root.exists() and any(
+            p.is_dir() and (p / "session.txt").exists()
+            for p in current_root.iterdir()
+        )
+    except OSError:
+        return 0
+    if has_current:
+        return 0
+    migrated = 0
+    for legacy in legacy_roots:
+        try:
+            if not legacy or not legacy.exists() or legacy.resolve() == current_root.resolve():
+                continue
+            for item in sorted(legacy.iterdir()):
+                if not item.is_dir() or not (item / "session.txt").exists():
+                    continue
+                target = current_root / item.name
+                if target.exists():
+                    continue
+                current_root.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(item, target)
+                migrated += 1
+            last = legacy / ".last_session"
+            if migrated and last.exists() and not (current_root / ".last_session").exists():
+                shutil.copy2(last, current_root / ".last_session")
+        except OSError:
+            continue
+        if migrated:
+            break  # la primera arrel antiga amb sessions guanya
+    return migrated
+
+
 def workspace_has_user_data(year: int) -> bool:
     """Return True if any input working file has non-header content. Used to
     detect autosaved state across app restarts."""

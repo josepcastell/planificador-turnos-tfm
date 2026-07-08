@@ -263,6 +263,21 @@ def create_empty_session_folder(session_dir: Path, year: int, carry_forward_sour
 init_workflow_state()
 
 DEFAULT_SESSION_ROOT.mkdir(parents=True, exist_ok=True)
+# Migració única d'arrels antigues (Desktop/Sessions_planificador i
+# <paquet>/dades/sessions): si l'arrel actual és buida i l'antiga té
+# sessions, es COPIEN aquí. Sense això, actualitzar el programa faria
+# aparèixer l'app buida i l'usuari creuria que ha perdut les dades.
+_legacy_roots = [_program_folder() / "dades" / "sessions"]
+for _env_var in ("USERPROFILE", "HOME"):
+    _env_path = os.environ.get(_env_var)
+    if _env_path:
+        _legacy_roots.append(Path(_env_path).expanduser() / "Desktop" / "Sessions_planificador")
+_migrated_n = session_store.migrate_legacy_session_roots(DEFAULT_SESSION_ROOT, _legacy_roots)
+if _migrated_n:
+    st.toast(
+        f"S'han recuperat {_migrated_n} sessió(ns) de la ubicació antiga.",
+        icon="📦",
+    )
 session_folders = session_store.list_session_folders(DEFAULT_SESSION_ROOT)
 session_options = [p.name for p in session_folders]
 last_session_name = read_last_session_name()
