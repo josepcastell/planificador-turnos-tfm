@@ -1,0 +1,37 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+streamlit.log
+*.log
+*.bak
+*.bak_*
+*.stable
+*.debugbak
+
+# Fitxers generats / derivats per any (es regeneren amb el codi)
+data/base_calendar_[0-9]*.csv
+data/derived/guard_constraints_*.csv
+data/derived/preassignments_weekday_*.csv
+data/derived/unavailability_*.csv
+data/*/calendar_slots.csv
+data/*/day_info.csv
+data/weekday/template_overrides_*.csv
+
+# Preferència local de la vista (àmbit/mes seleccionat)
+data/calendar_view_settings.json
+
+# Outputs generats del planner setmanal
+outputs/schedule_weekday*.csv
+outputs/metrics_weekday.csv
+
+# DADES REALS DEL SERVEI: mai al control de versions (confidencialitat)
+data/
+outputs/
+snapshots/
+Sessions_planificador/
+_backup_pre_clean/
+tmp/
+_audit_scan.py
