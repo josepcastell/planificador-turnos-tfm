@@ -172,6 +172,7 @@ def _slot_linked_ids_for_solver(common: dict) -> set:
     UNIÓ de les dues fonts: els derivats dels TEMPLATES (secundària NP del
     doblat, per (weekday, franja, slot)) i els del CATÀLEG (blocs globals de
     màquines vinculades, camp `linked_to`)."""
+    from src.core.utils import normalize_slot as _norm_slot
     from src.services.slot_catalog import slot_linked_ids_from_templates
     ids: set = set(common.get("slot_secondary_ids", set()) or set())
     templates_path = Path("data/weekday/weekly_slot_templates.csv")
@@ -181,7 +182,8 @@ def _slot_linked_ids_for_solver(common: dict) -> set:
             ids |= slot_linked_ids_from_templates(templates_df)
         except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
             pass
-    return ids
+    # normalize_slot: alinea amb les claus del solver (espais/guions → '_').
+    return {_norm_slot(s) for s in ids}
 
 
 def _links_by_wf_for_solver(weekday: dict, common: dict) -> dict:
@@ -190,6 +192,7 @@ def _links_by_wf_for_solver(weekday: dict, common: dict) -> dict:
     globals → clau ('', '')). Permet que un grup estigui vinculat un dia/franja
     i no un altre. L'acoblament transitiu fa que la mateixa persona cobreixi
     tot el grup (fins a 5 màquines)."""
+    from src.core.utils import normalize_slot as _norm_slot
     from src.services.slot_catalog import slot_link_pairs_by_weekday_franja
     out: dict = {}
     templates_path = Path("data/weekday/weekly_slot_templates.csv")
@@ -197,12 +200,15 @@ def _links_by_wf_for_solver(weekday: dict, common: dict) -> dict:
         try:
             templates_df = pd.read_csv(templates_path)
             out = {
-                k: list(v)
+                k: [(_norm_slot(a), _norm_slot(b)) for a, b in v]
                 for k, v in slot_link_pairs_by_weekday_franja(templates_df).items()
             }
         except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
             pass
-    catalog_pairs = [tuple(p) for p in (common.get("slot_links") or [])]
+    catalog_pairs = [
+        (_norm_slot(p[0]), _norm_slot(p[1]))
+        for p in (common.get("slot_links") or [])
+    ]
     if catalog_pairs:
         out.setdefault(("", ""), []).extend(catalog_pairs)
     return out
@@ -313,9 +319,13 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
 
     # `allowed_areas` és un límit FÍSIC (el facultatiu no es desplaça a
     # aquell lloc): a diferència de l'eligibility soft, és HARD. Passem
-    # el conjunt (prof, slot_id) a bloquejar al solver.
+    # el conjunt (prof, slot_id) a bloquejar al solver. El slot passa per
+    # `normalize_slot` (espais/guions → '_'): les claus del solver (sk[2])
+    # estan normalitzades així i sense això un slot amb espai al nom mai
+    # es bloquejaria.
+    from src.core.utils import normalize_slot as _norm_slot
     allowed_areas_hard_blocks = {
-        (str(r.professional_id).strip().upper(), str(r.slot_id).strip().upper())
+        (str(r.professional_id).strip().upper(), _norm_slot(r.slot_id))
         for r in extra_elig.itertuples(index=False)
     } if not extra_elig.empty else set()
 
@@ -368,6 +378,9 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
         "peonada_cap": common.get("peonada_cap", 3),
         "prior_presential_counts": prior_presential_counts or {},
         "prior_no_presential_counts": common.get("prior_no_presential_counts") or {},
+        # Acumulat d'ORDINÀRIES dels mesos anteriors de la tanda (per a
+        # l'equitat acumulada del tram 4 a core.py).
+        "prior_total_machine_counts": common.get("prior_total_machine_counts") or {},
         # Subset 'manual' (només les introduïdes per l'usuari) per al filtre
         # del flip al solver. Les autogenerades (guards, fix-catàleg) sí que
         # poden flipar.

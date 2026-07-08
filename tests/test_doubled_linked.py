@@ -109,7 +109,8 @@ class TestStructuralCouplingDoubled:
         # Daily compat (màx 1 màquina per franja, vinculats col·lapsen)
         _add_daily_compat_constraints(
             model, x, professionals, rows, ["2026-01-06"],
-            review_slots=set(), slot_links=slot_links,
+            review_slots=set(),
+            links_by_wf=({("", ""): slot_links} if slot_links else {}),
         )
         # Linking: només la pos PRES es lliga. Vinculació GLOBAL → clau ('', '').
         _add_structural_coupling(model, x, professionals, keys_by_day,

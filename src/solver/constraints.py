@@ -65,63 +65,79 @@ def _representative_key(keys):
     )[0]
 
 
-def _build_machine_term_specs(
-    keys_by_day, review_slots, links_by_wf=None,
-    secondary_slot_ids=None,
-):
+def _slot_groups_from_pairs(pairs):
+    """Tancament transitiu de parelles (a,b) → BLOCS d'slot_ids (unió-troba).
+    [(A,B), (B,C)] → [[A, B, C]]. Només retorna blocs de mida ≥ 2, ordenats."""
+    parent: dict = {}
+
+    def _find(s):
+        parent.setdefault(s, s)
+        while parent[s] != s:
+            parent[s] = parent[parent[s]]
+            s = parent[s]
+        return s
+
+    for a, b in pairs or []:
+        parent[_find(a)] = _find(b)
+    groups: dict = {}
+    for s in parent:
+        groups.setdefault(_find(s), []).append(s)
+    return sorted(sorted(g) for g in groups.values() if len(g) >= 2)
+
+
+def _build_machine_term_specs(keys_by_day, review_slots, links_by_wf=None):
     """Pre-compute, for each day, the slot_keys that contribute to machine terms.
 
     Independent of professional: same structure for all P. Used by
     _collect_machine_terms_for_day to avoid re-filtering day_keys per (p, day).
 
     links_by_wf: dict {(weekday_code, franja): [(slot_a, slot_b), ...]} amb les
-    parelles vinculades PER dia-setmana i franja (clau ('', '') = globals). Els
-    slots d'una parella es compten com una sola màquina el dia que hi són
-    vinculats.
+    parelles vinculades PER dia-setmana i franja (clau ('', '') = globals).
 
-    secondary_slot_ids: conjunt d'slot_ids marcats com a "màquina
-    secundària" (apareixen al `linked_to` d'una altra fila al catàleg).
-    Aquests slots queden COBERTS però NO COMPTEN als objectius setmanals
-    d'equilibri: no entren a `machine_keys`, `presential_machine_keys`
-    ni `flippable_machine_keys`. La instància principal del par linked
-    sí compta (via `coupling_keys`).
+    Retorna specs[day] = (coupling_groups, machine_keys,
+                          presential_machine_keys, flippable_machine_keys):
 
-    IMPORTANT: si un slot linked està DOBLAT (p.ex. TC3 amb 2 instàncies
-    PRES + NP el mateix dia), només la instància REPRESENTATIVA (PRES amb
-    posició més baixa) entra al coupling. Les instàncies extres (NP
-    doblades) — si NO són secundàries — tornen al flow normal i queden
-    al pool `flippable_machine_keys`."""
-    secondary_set = _norm_set(secondary_slot_ids)
+    - coupling_groups: list[list[slot_key]] — un grup per BLOC vinculat
+      (tancament transitiu) que aplica AQUELL (dia, franja) amb ≥2 slots
+      presents. Cada grup compta com 1 màquina; compta com a PRESENCIAL
+      només si algun membre ho és.
+    - Els slots d'un bloc que NO aplica aquell dia (o amb la resta del bloc
+      absent) tornen al flow normal i compten INDIVIDUALMENT amb la seva
+      presencialitat real — mai queden invisibles per a la quota setmanal.
+
+    IMPORTANT: si un slot vinculat està DOBLAT (2 instàncies PRES + NP el
+    mateix dia), només la instància REPRESENTATIVA (PRES amb posició més
+    baixa) entra al grup. Les instàncies extres (NP doblades) tornen al
+    flow normal i queden al pool `flippable_machine_keys`."""
     specs = {}
     for day, day_keys in keys_by_day.items():
-        # Parelles vinculades que apliquen a AQUEST dia (per dia-setmana).
-        link_pairs = _links_for_weekday(links_by_wf, _weekday_code(day))
-        coupling_keys: list = []
-        uncoupled_linked: list = []
-        # Set d'slot_keys que ja s'han contat com a part d'un par linked
-        # (representatius). La resta queda fora del coupling i va al flow
-        # normal a sota.
-        coupled_slot_keys: set = set()
-        for slot_a, slot_b in link_pairs:
-            a_keys = [sk for sk in day_keys if sk[2] == slot_a and sk[4] != "PEONADA"]
-            b_keys = [sk for sk in day_keys if sk[2] == slot_b and sk[4] != "PEONADA"]
-            if a_keys and b_keys:
-                rep_a = _representative_key(a_keys)
-                rep_b = _representative_key(b_keys)
-                # Només els representatius entren al coupling (els enllaça
-                # `_add_structural_coupling`). La resta d'instàncies queden
-                # lliures (doblades).
-                coupling_keys.extend([rep_a, rep_b])
-                coupled_slot_keys.update([rep_a, rep_b])
-            else:
-                uncoupled_linked.extend(a_keys + b_keys)
+        wd = _weekday_code(day)
+        coupling_groups: list = []
+        grouped_keys: set = set()
+        for franja in sorted({sk[1] for sk in day_keys}):
+            pairs = _links_for_daykey(links_by_wf, wd, franja)
+            if not pairs:
+                continue
+            frj_keys = [
+                sk for sk in day_keys
+                if sk[1] == franja and sk[4] != "PEONADA"
+            ]
+            for block in _slot_groups_from_pairs(pairs):
+                reps = []
+                for slot in block:
+                    s_keys = [sk for sk in frj_keys if sk[2] == slot]
+                    if s_keys:
+                        reps.append(_representative_key(s_keys))
+                if len(reps) >= 2:
+                    coupling_groups.append(reps)
+                    grouped_keys.update(reps)
 
         machine_keys = []
         presential_machine_keys = []
         flippable_machine_keys = []
         for sk in day_keys:
-            if sk in coupled_slot_keys:
-                continue  # ja contat al coupling
+            if sk in grouped_keys:
+                continue  # ja contat al seu grup vinculat
             slot_id, presentiality = sk[2], sk[3]
             if slot_id in review_slots:
                 continue
@@ -129,10 +145,6 @@ def _build_machine_term_specs(
             # de guàrdia. La peonada (work_mode del template) també compta a
             # l'equilibri setmanal. Sense llista hardcoded.
             if str(slot_id).upper() in GUARDS_RESERVED_SLOT_IDS:
-                continue
-            # Màquines SECUNDÀRIES (linked_to d'una altra fila): cobertes
-            # però NO compten als objectius setmanals d'equilibri.
-            if str(slot_id).strip().upper() in secondary_set:
                 continue
             machine_keys.append(sk)
             if presentiality == "PRESENCIAL":
@@ -143,7 +155,7 @@ def _build_machine_term_specs(
                 flippable_machine_keys.append(sk)
 
         specs[day] = (
-            coupling_keys, uncoupled_linked, machine_keys,
+            coupling_groups, machine_keys,
             presential_machine_keys, flippable_machine_keys,
         )
     return specs
@@ -152,26 +164,24 @@ def _build_machine_term_specs(
 def _collect_machine_terms_for_day(model, x, p, day, day_spec, prefix, pres_flip=None):
     """Return (machine_terms, presential_machine_terms) for one professional+day.
 
-    Els slots vinculats (linked_to del catàleg) compten com una sola
-    màquina. PEONADA i slots de revisió queden exclosos. Un slot
-    NO_PRESENCIAL ordinari "flipat" (pres_flip[(p,sk)]==1) compta com a
-    presencial. Tot es deriva del catàleg; no depèn de cap nom d'slot.
+    Cada BLOC vinculat que aplica aquell dia compta com una sola màquina
+    (variable pròpia per bloc — dos blocs el mateix dia compten 2), i com a
+    presencial només si algun membre del bloc és PRESENCIAL. PEONADA i
+    slots de revisió queden exclosos. Un slot NO_PRESENCIAL ordinari
+    "flipat" (pres_flip[(p,sk)]==1) compta com a presencial.
     """
-    (coupling_keys, uncoupled_linked_keys, machine_keys,
+    (coupling_groups, machine_keys,
      presential_machine_keys, flippable_machine_keys) = day_spec
     pres_flip = pres_flip or {}
     machine_terms = []
     presential_machine_terms = []
 
-    if coupling_keys:
-        coupled = model.NewBoolVar(f"{prefix}_urg_tc4_{p}_{day}")
-        model.AddMaxEquality(coupled, [x[p, sk] for sk in coupling_keys])
+    for gidx, group in enumerate(coupling_groups):
+        coupled = model.NewBoolVar(f"{prefix}_linkblk{gidx}_{p}_{day}")
+        model.AddMaxEquality(coupled, [x[p, sk] for sk in group])
         machine_terms.append(coupled)
-        presential_machine_terms.append(coupled)
-    else:
-        for sk in uncoupled_linked_keys:
-            machine_terms.append(x[p, sk])
-            presential_machine_terms.append(x[p, sk])
+        if any(str(sk[3]).upper() == "PRESENCIAL" for sk in group):
+            presential_machine_terms.append(coupled)
 
     for sk in machine_keys:
         machine_terms.append(x[p, sk])
@@ -292,28 +302,40 @@ def _add_conditional_doubling_constraints(
 
 
 def _add_daily_compat_constraints(model, x, professionals, slot_rows, unique_days, review_slots,
-                                  slot_links=None, unlimited_professionals=None,
+                                  links_by_wf=None, unlimited_professionals=None,
                                   pres_flip=None):
     """Màxim 1 màquina per facultatiu i franja (presencial O no presencial:
     ningú pot estar a dues màquines el mateix matí/tarda) i màxim 1 slot
     PRESENCIAL per facultatiu i dia.
 
-    Els slots vinculats (slot_links) compten com una sola màquina quan tots
-    dos tenen instància a la mateixa franja. Els slots de revisió no compten
-    ni tenen límit per dia. Els facultatius 'unlimited' (TLD/telediagnòstic
-    remot) no tenen aquests límits.
+    Els BLOCS vinculats compten com una sola màquina NOMÉS els (dia-setmana,
+    franja) on el vincle aplica (`links_by_wf`; clau ('', '') = globals) —
+    mai globalment: si A i B només estan vinculades el dilluns, el dimarts
+    ocupar-les totes dues a la mateixa franja segueix sent infactible. Els
+    slots de revisió no compten ni tenen límit per dia. Els facultatius
+    'unlimited' (TLD/telediagnòstic remot) no tenen aquests límits.
     """
     unlimited = set(unlimited_professionals or ())
-    link_pairs = list(slot_links or [])
-    linked_slot_ids = {s for pair in link_pairs for s in pair}
     rows_by_day: dict[str, list] = {}
     for r in slot_rows:
         rows_by_day.setdefault(str(r.day), []).append(r)
+    # Blocs (tancament transitiu) per clau (weekday, franja), pre-calculats.
+    blocks_by_daykey: dict = {}
+
+    def _blocks_for(wd: str, franja: str) -> list:
+        key = (wd, franja)
+        if key not in blocks_by_daykey:
+            blocks_by_daykey[key] = _slot_groups_from_pairs(
+                _links_for_daykey(links_by_wf, wd, franja)
+            )
+        return blocks_by_daykey[key]
+
     for p in professionals:
         if p in unlimited:
             continue
         for day in unique_days:
             day_rows = rows_by_day.get(day, [])
+            wd = _weekday_code(day)
             for franja in ["MATI", "TARDA"]:
                 franja_rows = [
                     r for r in day_rows
@@ -321,23 +343,29 @@ def _add_daily_compat_constraints(model, x, professionals, slot_rows, unique_day
                     and str(r.slot_id) not in review_slots
                 ]
                 slot_terms = []
-                for slot_a, slot_b in link_pairs:
-                    pair_rows = [r for r in franja_rows if str(r.slot_id) in {slot_a, slot_b}]
-                    if pair_rows:
+                counted_ids: set = set()
+                for gidx, block in enumerate(_blocks_for(wd, franja)):
+                    block_rows = [
+                        r for r in franja_rows if str(r.slot_id) in set(block)
+                    ]
+                    if block_rows:
                         coupled = model.NewBoolVar(
-                            f"slot_link_{slot_a}_{slot_b}_{p}_{day}_{franja}"
+                            f"slot_link_{p}_{day}_{franja}_{gidx}"
                         )
-                        model.AddMaxEquality(coupled, [x[p, _make_slot_key(r)] for r in pair_rows])
+                        model.AddMaxEquality(
+                            coupled, [x[p, _make_slot_key(r)] for r in block_rows]
+                        )
                         slot_terms.append(coupled)
+                        counted_ids.update(str(r.slot_id) for r in block_rows)
                 for row in franja_rows:
-                    if str(row.slot_id) not in linked_slot_ids:
+                    if str(row.slot_id) not in counted_ids:
                         slot_terms.append(x[p, _make_slot_key(row)])
                 if slot_terms:
                     model.Add(sum(slot_terms) <= 1)
 
             # Màxim 1 slot PRESENCIAL per dia i facultatiu (els vinculats
-            # compten com una sola màquina). El comodí (unlimited) ja està
-            # exclòs al principi del bucle.
+            # compten com una sola màquina ELS DIES que el vincle aplica).
+            # El comodí (unlimited) ja està exclòs al principi del bucle.
             #
             # EXCEPCIÓ: les màquines NIT NO entren al cap diari. La nit és
             # un torn diferent que pot coexistir amb una màquina diürna
@@ -347,25 +375,31 @@ def _add_daily_compat_constraints(model, x, professionals, slot_rows, unique_day
                 r for r in day_rows
                 if str(getattr(r, "franja", "")).upper() != "NIT"
             ]
-            counted_linked = set()
+            counted_keys: set = set()
             pres_terms = []
-            for slot_a, slot_b in link_pairs:
-                pair_keys = [
-                    _make_slot_key(r) for r in day_rows_no_nit
-                    if str(r.slot_id) in {slot_a, slot_b}
-                    and str(r.slot_id) not in review_slots
-                    and str(getattr(r, "presentiality", "")).upper() == "PRESENCIAL"
-                ]
-                if pair_keys:
-                    coupled = model.NewBoolVar(f"day_pres_link_{slot_a}_{slot_b}_{p}_{day}")
-                    model.AddMaxEquality(coupled, [x[p, sk] for sk in pair_keys])
-                    pres_terms.append(coupled)
-                    counted_linked.update({slot_a, slot_b})
+            for franja in ["MATI", "TARDA"]:
+                for gidx, block in enumerate(_blocks_for(wd, franja)):
+                    block_keys = [
+                        _make_slot_key(r) for r in day_rows_no_nit
+                        if str(r.franja) == franja
+                        and str(r.slot_id) in set(block)
+                        and str(r.slot_id) not in review_slots
+                        and str(getattr(r, "presentiality", "")).upper() == "PRESENCIAL"
+                    ]
+                    if block_keys:
+                        coupled = model.NewBoolVar(
+                            f"day_pres_link_{p}_{day}_{franja}_{gidx}"
+                        )
+                        model.AddMaxEquality(coupled, [x[p, sk] for sk in block_keys])
+                        pres_terms.append(coupled)
+                        counted_keys.update(block_keys)
             for r in day_rows_no_nit:
-                if str(r.slot_id) in review_slots or str(r.slot_id) in counted_linked:
+                if str(r.slot_id) in review_slots:
+                    continue
+                sk = _make_slot_key(r)
+                if sk in counted_keys:
                     continue
                 pres = str(getattr(r, "presentiality", "")).upper()
-                sk = _make_slot_key(r)
                 if pres == "PRESENCIAL":
                     pres_terms.append(x[p, sk])
                 elif pres_flip is not None and (p, sk) in pres_flip:
@@ -499,7 +533,9 @@ def _add_structural_coupling(model, x, professionals, keys_by_day, links_by_wf=N
         return
     for day, day_keys in keys_by_day.items():
         wd = _weekday_code(day)
-        franges = {sk[1] for sk in day_keys}
+        # sorted: l'ordre d'iteració d'un set canvia entre processos
+        # (PYTHONHASHSEED) i faria el model no reproduïble.
+        franges = sorted({sk[1] for sk in day_keys})
         for franja in franges:
             for slot_a, slot_b in _links_for_daykey(links_by_wf, wd, franja):
                 a_keys = [sk for sk in day_keys if sk[2] == slot_a and sk[1] == franja]
@@ -542,7 +578,11 @@ def _add_review_continuity(model, x, professionals, keys_by_day, slot_rows, work
     lliurement."""
     from src.solver.preprocessing import _day_fully_blocked
     unav_index = unav_index or {}
-    for review_slot in review_slots:
+    # Portadors REALS: el professional virtual "NONE" mai té indisponibilitats
+    # però té x[NONE, sk] == 0 forçat — si comptés com a portador possible, la
+    # relaxació anti-infeasibility de sota no s'activaria mai.
+    real_carriers = [p for p in professionals if str(p).strip().upper() != "NONE"]
+    for review_slot in sorted(review_slots):
         review_days = sorted({str(r.day) for r in slot_rows if str(r.slot_id) == review_slot})
         n = len(review_days)
         for i, day in enumerate(review_days):
@@ -562,7 +602,7 @@ def _add_review_continuity(model, x, professionals, keys_by_day, slot_rows, work
                 has_carrier = any(
                     not _day_fully_blocked(p, day, unav_index)
                     and not _day_fully_blocked(p, next_working, unav_index)
-                    for p in professionals
+                    for p in real_carriers
                 )
                 if not has_carrier:
                     continue  # relaxa: cap facultatiu pot enllaçar els dos dies
@@ -600,7 +640,7 @@ def _add_flip_target_cap(model, x, pres_flip, quota_hard_professionals, unique_d
                 spec = machine_specs.get(day)
                 if not spec:
                     continue
-                _, _, _, presential_keys, flippable_keys = spec
+                _, _, presential_keys, flippable_keys = spec
                 fixed_terms.extend(x[p, sk] for sk in presential_keys if (p, sk) in x)
                 flip_terms.extend(
                     pres_flip[(p, sk)] for sk in flippable_keys if (p, sk) in pres_flip

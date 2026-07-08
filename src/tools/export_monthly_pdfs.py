@@ -41,6 +41,7 @@ class _VerticalText(Flowable):
 from src.domain.constants import GUARDS_RESERVED_SLOT_IDS
 from src.services.calendar_inputs import load_guard_schedule_by_day
 from src.domain.schedule_format import (
+    area_palette_hex,
     calendar_display_compact_slot_label,
     calendar_display_slot_area,
     calendar_display_slot_sort_key,
@@ -85,22 +86,10 @@ def build_pdf_with_fallback(doc: SimpleDocTemplate, story) -> str:
         return fallback
 
 
-def month_name_es(year: int, month: int) -> str:
-    names = {
-        1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
-        5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
-        9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre",
-    }
-    return f"{names[month]} {year}"
-
-
 def month_name_ca(year: int, month: int) -> str:
-    names = {
-        1: "gener", 2: "febrer", 3: "març", 4: "abril",
-        5: "maig", 6: "juny", 7: "juliol", 8: "agost",
-        9: "setembre", 10: "octubre", 11: "novembre", 12: "desembre",
-    }
-    return f"{names[month]} {year}"
+    """«gener 2026». Font única del nom: domain (constants.CATALAN_MONTHS)."""
+    from src.domain.month_scope import catalan_month_name
+    return f"{catalan_month_name(month)} {year}"
 
 
 def calendar_day_type_label(day_type: str) -> str:
@@ -172,21 +161,10 @@ def calendar_slot_area(slot_id: str) -> str:
     return "" if area == "ALTRES" else area
 
 
-# Paleta estable per àrea (mateixos colors i ordre que les classes CSS
-# `.schedule-area-c1..c6` de styles.py, perquè PDF i app coincideixin).
-_AREA_PDF_PALETTE = (
-    "#DBEAFE", "#DCFCE7", "#EDE9FE", "#FEF3C7", "#FCE7F3", "#CCFBF1",
-)
-
-
 def calendar_slot_area_background(area: str):
     """Color de fons estable per àrea (qualsevol valor que defineixi
-    l'usuari), sense àrees predefinides. Sense àrea → gris neutre."""
-    a = str(area).strip().upper()
-    if not a or a == "ALTRES":
-        return colors.HexColor("#F8FAFC")
-    idx = sum((i + 1) * ord(c) for i, c in enumerate(a)) % len(_AREA_PDF_PALETTE)
-    return colors.HexColor(_AREA_PDF_PALETTE[idx])
+    l'usuari). Paleta única a domain (schedule_format.area_palette_hex)."""
+    return colors.HexColor(area_palette_hex(area))
 
 
 def calendar_slot_pdf_sort_key(slot_id: str) -> tuple[int, str]:
@@ -487,63 +465,6 @@ def prepare_month_df(schedule_csv: str, year: int, month: int) -> pd.DataFrame:
     return df.sort_values(
         ["day", "franja_order", "slot_order", "slot_id", "professional"]
     ).reset_index(drop=True)
-
-
-def build_general_pdf(schedule_csv: str, professionals_csv: str, year: int, month: int, output_pdf: str) -> None:
-    df = prepare_month_df(schedule_csv, year, month)
-    names = load_professional_names(professionals_csv)
-
-    styles = getSampleStyleSheet()
-    story = []
-
-    title = f"Planning general - {month_name_es(year, month)}"
-    story.append(Paragraph(title, styles["Title"]))
-    story.append(Spacer(1, 6 * mm))
-
-    days = sorted(df["day_str"].unique())
-
-    for day in days:
-        day_df = df[df["day_str"] == day].copy()
-
-        story.append(Paragraph(day, styles["Heading2"]))
-        story.append(Spacer(1, 2 * mm))
-
-        table_data = [["Franja", "Màquina", "Profesional", "Nombre", "Presencialidad", "Modo"]]
-        for row in day_df.itertuples(index=False):
-            pid = str(row.professional)
-            table_data.append([
-                row.franja,
-                row.slot_id,
-                pid,
-                names.get(pid, ""),
-                row.presentiality,
-                row.work_mode,
-            ])
-
-        table = Table(table_data, colWidths=[22 * mm, 38 * mm, 26 * mm, 78 * mm, 38 * mm, 35 * mm])
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D9E2F3")),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F7F7")]),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ]))
-        story.append(table)
-        story.append(Spacer(1, 6 * mm))
-
-    Path(output_pdf).parent.mkdir(parents=True, exist_ok=True)
-    doc = SimpleDocTemplate(
-        output_pdf,
-        pagesize=landscape(A4),
-        leftMargin=10 * mm,
-        rightMargin=10 * mm,
-        topMargin=10 * mm,
-        bottomMargin=10 * mm,
-    )
-    build_pdf_with_fallback(doc, story)
 
 
 def build_weekday_grid_calendar_pdf(
@@ -1024,7 +945,7 @@ def build_general_calendar_pdf(
     df["day_date"] = pd.to_datetime(df["day_str"]).dt.date
 
     story = []
-    story.append(Paragraph(f"Calendari general - {month_name_es(year, month)}", title_style))
+    story.append(Paragraph(f"Calendari general - {month_name_ca(year, month)}", title_style))
     story.append(Spacer(1, 2 * mm))
 
     table_data = [[Paragraph(header, header_style) for header in weekday_headers]]
@@ -1105,76 +1026,6 @@ def build_general_calendar_pdf(
     build_pdf_with_fallback(doc, story)
 
 
-def build_individual_pdfs(schedule_csv: str, professionals_csv: str, year: int, month: int, output_dir: str) -> None:
-    df = prepare_month_df(schedule_csv, year, month)
-    names = load_professional_names(professionals_csv)
-    styles = getSampleStyleSheet()
-
-    outdir = Path(output_dir)
-    if outdir.exists():
-        shutil.rmtree(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    for professional_id in sorted(df["professional"].astype(str).unique()):
-        pdf_path = outdir / f"individual_{professional_id}_{year}_{month:02d}.pdf"
-        prof_df = df[df["professional"].astype(str) == professional_id].copy()
-
-        story = []
-        display_name = names.get(professional_id, "")
-        title = f"Planning individual - {professional_id}"
-        if display_name:
-            title += f" - {display_name}"
-
-        story.append(Paragraph(title, styles["Title"]))
-        story.append(Spacer(1, 6 * mm))
-        story.append(Paragraph(month_name_es(year, month), styles["Heading2"]))
-        story.append(Spacer(1, 4 * mm))
-
-        table_data = [["Día", "Franja", "Màquina", "Presencialidad", "Modo"]]
-        for row in prof_df.itertuples(index=False):
-            compact = individual_compact_label(row.slot_id)
-            if compact is not None:
-                table_data.append([
-                    row.day_str,
-                    "",
-                    compact,
-                    "",
-                    "",
-                ])
-            else:
-                table_data.append([
-                    row.day_str,
-                    row.franja,
-                    row.slot_id,
-                    row.presentiality,
-                    row.work_mode,
-                ])
-
-        table = Table(table_data, colWidths=[35 * mm, 22 * mm, 48 * mm, 42 * mm, 35 * mm])
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D9E2F3")),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F7F7")]),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ]))
-        story.append(table)
-
-        doc = SimpleDocTemplate(
-            str(pdf_path),
-            pagesize=A4,
-            leftMargin=15 * mm,
-            rightMargin=15 * mm,
-            topMargin=15 * mm,
-            bottomMargin=15 * mm,
-        )
-        build_pdf_with_fallback(doc, story)
-
-
-
 def build_individual_calendar_pdfs(
     schedule_csv: str,
     professionals_csv: str,
@@ -1233,7 +1084,7 @@ def build_individual_calendar_pdfs(
 
         story.append(Paragraph(title, styles["Title"]))
         story.append(Spacer(1, 4 * mm))
-        story.append(Paragraph(month_name_es(year, month), styles["Heading2"]))
+        story.append(Paragraph(month_name_ca(year, month), styles["Heading2"]))
         story.append(Spacer(1, 4 * mm))
 
         table_data = [weekday_headers]
@@ -1498,8 +1349,15 @@ def main():
             set_slot_area_overrides(slot_area_map(_cat))
             set_slot_metric_overrides(slot_metric_family_map(_cat))
             set_slot_review_overrides(review_slot_ids(_cat))
-    except Exception:
-        pass
+    except Exception as _exc:
+        # Mai silenciós: sense overrides, els PDF surten sense àrees ni
+        # revisions correctes. El stderr arriba a la UI via run_and_store.
+        import sys as _sys
+        print(
+            f"AVIS: no s'ha pogut carregar el cataleg per als PDF ({_exc}); "
+            "els colors d'area i les revisions poden sortir malament.",
+            file=_sys.stderr,
+        )
 
     schedule_csv = args.schedule_csv
     professionals_csv = args.professionals_csv

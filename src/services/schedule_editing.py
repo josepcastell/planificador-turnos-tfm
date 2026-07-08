@@ -31,9 +31,15 @@ def save_planning_editor_changes(
         df["work_mode"] = df["work_mode"].fillna("").astype(str).str.strip().str.upper()
         df["professional"] = df["professional"].fillna("").astype(str).str.strip().str.upper()
 
+    # Discriminador d'ocurrència: amb required_staff ≥ 2 hi ha 2+ files amb
+    # la MATEIXA clau (day, franja, slot, pres, work_mode) i persones
+    # diferents; sense l'_occ el merge seria cartesià (files duplicades i
+    # canvis espuris que esborren un facultatiu).
+    for df in [original, edited]:
+        df["_occ"] = df.groupby(key_cols).cumcount()
     merged = original.merge(
         edited,
-        on=key_cols,
+        on=key_cols + ["_occ"],
         how="inner",
         suffixes=("_old", "_new"),
     )
@@ -171,9 +177,13 @@ def write_edited_schedule(schedule_df: pd.DataFrame, path: Path, columns: list[s
                 for col in key_cols + ["professional"]:
                     df[col] = df[col].fillna("").astype(str).str.strip()
             original_cols = original.columns.tolist()
+            # _occ: mateixa clau repetida (required_staff ≥ 2) → el merge
+            # aparella la n-èsima ocurrència amb la n-èsima, mai cartesià.
+            original["_occ"] = original.groupby(key_cols).cumcount()
+            out["_occ"] = out.groupby(key_cols).cumcount()
             original = original.drop(columns=["professional"]).merge(
-                out[key_cols + ["professional"]],
-                on=key_cols,
+                out[key_cols + ["_occ", "professional"]],
+                on=key_cols + ["_occ"],
                 how="left",
             )
             original["professional"] = original["professional"].fillna("NONE").replace("", "NONE")
@@ -185,39 +195,3 @@ def write_edited_schedule(schedule_df: pd.DataFrame, path: Path, columns: list[s
     out.to_csv(path, index=False)
 
 
-def append_quick_absence(
-    absences_path: Path,
-    professional_id: str,
-    absence_type: str,
-    start_day,
-    end_day,
-    notes: str,
-    valid_professionals: set[str],
-) -> None:
-    current = read_table(absences_path, ["absence_type", "professional_id", "start_day", "end_day", "notes"])
-    new_row = pd.DataFrame([{
-        "absence_type": absence_type,
-        "professional_id": professional_id,
-        "start_day": start_day,
-        "end_day": end_day,
-        "notes": notes,
-    }])
-    save_absences(pd.concat([current, new_row], ignore_index=True), absences_path, valid_professionals)
-
-
-def append_quick_guard(
-    guards_path: Path,
-    professional_id: str,
-    guard_kind: str,
-    day,
-    notes: str,
-    valid_professionals: set[str],
-) -> None:
-    current = read_table(guards_path, ["day", "professional_id", "guard_kind", "notes"])
-    new_row = pd.DataFrame([{
-        "day": day,
-        "professional_id": professional_id,
-        "guard_kind": guard_kind,
-        "notes": notes,
-    }])
-    save_guards(pd.concat([current, new_row], ignore_index=True), guards_path, valid_professionals)

@@ -43,8 +43,13 @@ def export_year_pdfs(
             set_slot_area_overrides(slot_area_map(_cat))
             set_slot_metric_overrides(slot_metric_family_map(_cat))
             set_slot_review_overrides(review_slot_ids(_cat))
-    except Exception:
-        pass
+    except Exception as _exc:
+        import sys as _sys
+        print(
+            f"AVIS: no s'ha pogut carregar el cataleg per als PDF ({_exc}); "
+            "els colors d'area i les revisions poden sortir malament.",
+            file=_sys.stderr,
+        )
 
     generated = 0
     for month in range(start_month, end_month + 1):

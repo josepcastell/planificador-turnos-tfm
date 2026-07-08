@@ -35,8 +35,11 @@ CSV_HEADERS: dict[str, str] = {
     "data/absences/assignments.csv":
         "absence_type,professional_id,start_day,end_day,notes\n",
     "data/weekday/unavailability.csv": "professional_id,day,reason\n",
+    # Inclou franja/presentiality/work_mode: és el que escriu l'editor de
+    # canvis (schedule_editing) — l'esquema anterior havia divergit.
     "data/weekday/preassignments.csv":
-        "professional_id,day,slot_id,fixed,source,notes\n",
+        "professional_id,day,franja,slot_id,presentiality,work_mode,"
+        "fixed,source,notes\n",
     # Màquines fixes per facultatiu (granular: dia setmanal + franja).
     # weekday_name/franja buits o "*" = totes (comportament global).
     "data/weekday/fixed_machines.csv":

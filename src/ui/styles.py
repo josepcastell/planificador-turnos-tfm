@@ -1,5 +1,18 @@
 import streamlit as st
 
+from src.domain.schedule_format import AREA_OTHER_HEX, AREA_PALETTE_HEX
+
+# Classes de color per àrea generades des de la paleta ÚNICA de domain
+# (schedule_format.AREA_PALETTE_HEX) — app, Excel i PDF sempre coincideixen.
+_AREA_CSS = "\n".join(
+    f"        .schedule-area-c{i + 1} {{ background: {hex_color.lower()}; }}"
+    for i, hex_color in enumerate(AREA_PALETTE_HEX)
+) + (
+    "\n        .schedule-area-other {\n"
+    f"            background: {AREA_OTHER_HEX.lower()};\n"
+    "        }"
+)
+
 
 def apply_global_styles() -> None:
     st.markdown(
@@ -390,18 +403,7 @@ def apply_global_styles() -> None:
             letter-spacing: 0.03em;
         }
 
-        /* Paleta genèrica per àrea (qualsevol àrea de l'usuari). Mateixos
-           colors i ordre que _AREA_PDF_PALETTE perquè app i PDF coincideixin. */
-        .schedule-area-c1 { background: #dbeafe; }
-        .schedule-area-c2 { background: #dcfce7; }
-        .schedule-area-c3 { background: #ede9fe; }
-        .schedule-area-c4 { background: #fef3c7; }
-        .schedule-area-c5 { background: #fce7f3; }
-        .schedule-area-c6 { background: #ccfbf1; }
-
-        .schedule-area-other {
-            background: #f8fafc;
-        }
+""" + _AREA_CSS + """
 
         .schedule-chip-list {
             display: grid;

@@ -10,14 +10,11 @@ from src.domain.schedule_format import is_review_slot, slot_metric_family
 _SCOPED_COLS = ["day", "day_dt", "slot_id", "professional", "presentiality", "work_mode"]
 
 
-import re as _re
-_SUFFIX_RE = _re.compile(r"_\d+$")
-
-
-def _base_pid(pid: str) -> str:
-    """Treu el sufix `_N` de duplicats (XX, XX_2 → XX). Per a mètriques
-    els duplicats es comporten com el mateix facultatiu."""
-    return _SUFFIX_RE.sub("", str(pid).strip().upper())
+# Helpers compartits (font única): base_pid a domain, fallback al servei.
+from src.services.professionals_info import (  # noqa: E402
+    base_pid as _base_pid,
+    fallback_professional_ids as _fallback_ids,
+)
 
 
 def _slot_link_pairs() -> list[tuple[str, str]]:
@@ -153,17 +150,8 @@ def _scoped_review_rows(year: int, metric_months: list[int]) -> pd.DataFrame:
     return df[mask][cols].reset_index(drop=True)
 
 
-def _fallback_ids() -> set[str]:
-    """IDs (en majúscules) dels facultatius comodí (professionals.csv
-    fallback=1)."""
-    pp = Path("data/professionals.csv")
-    if not pp.exists() or pp.stat().st_size == 0:
-        return set()
-    pdf = pd.read_csv(pp)
-    if not {"professional_id", "fallback"}.issubset(pdf.columns):
-        return set()
-    fb = pd.to_numeric(pdf["fallback"], errors="coerce").fillna(0).astype(int)
-    return {_base_pid(p) for p in pdf.loc[fb == 1, "professional_id"]}
+# NOTA: `_fallback_ids` és ara `professionals_info.fallback_professional_ids`
+# (importat a dalt amb àlies) — mateixa semàntica, font única.
 
 
 def _capacity_by_prof(year: int, selected_months: list[int]) -> dict[str, float]:
@@ -352,92 +340,6 @@ def _render_accumulated_metrics(
         )
 
 
-def render_regenerate_button_for(
-    restriction_key: str,
-    label: str,
-    *,
-    year: int,
-    month: int,
-    scope_start_month: int,
-    scope_end_month: int,
-    selected_months: list[int],
-    public_holidays_path: Path,
-    base_calendar_overrides_path: Path,
-    base_calendar_path: Path,
-    session_dir: Path,
-    save_generated_session_folder,
-    pdf_output_dir: Path,
-    professionals_path: Path,
-) -> None:
-    """Parell de botons «Regenerar» + «Desfer» per a una restricció concreta.
-    El «Regenerar» aplica NOMÉS aquesta restricció sobre el definitiu
-    actual (o l'inicial si encara no n'hi ha); el «Desfer» restaura
-    l'estat anterior del definitiu (undo de nivell únic)."""
-    from src.ui.planning_calendar_tabs import (
-        has_undo_available,
-        run_weekday_regenerate,
-        run_weekday_undo,
-    )
-    _col_regen, _col_undo = st.columns([3, 1])
-    with _col_regen:
-        if st.button(
-            label,
-            key=f"regenerate_btn_{restriction_key}",
-            width="stretch",
-            type="primary",
-            help=(
-                "Aplica NOMÉS aquesta restricció al definitiu actual. Si "
-                "encara no hi ha definitiu, parteix del calendari inicial. "
-                "Les restriccions aplicades anteriorment es mantenen "
-                "perquè ja són al definitiu (estabilitat soft)."
-            ),
-        ):
-            run_weekday_regenerate(
-                f"Regenerar amb {restriction_key}",
-                year, scope_start_month, scope_end_month, selected_months,
-                public_holidays_path, base_calendar_overrides_path,
-                base_calendar_path, session_dir, month,
-                save_generated_session_folder,
-                pdf_output_dir, professionals_path,
-                keep_restriction=restriction_key,
-            )
-            st.rerun()
-    with _col_undo:
-        _undo_available = has_undo_available()
-        if st.button(
-            "Desfer",
-            key=f"undo_btn_{restriction_key}",
-            width="stretch",
-            disabled=not _undo_available,
-            help=(
-                "Restaura el calendari definitiu anterior (abans del "
-                "darrer Regenerar). Undo de nivell únic."
-            ) if _undo_available else (
-                "No hi ha cap regeneració anterior per desfer."
-            ),
-        ):
-            if run_weekday_undo(pdf_output_dir):
-                st.toast("Calendari definitiu restaurat.", icon="↩️")
-                st.rerun()
-
-
-def render_last_regeneration_report() -> None:
-    """Informe del darrer regenerat: quines assignacions ha canviat el
-    solver respecte al punt de partida (definitiu anterior o inicial)."""
-    if "weekday_reajust_report" not in st.session_state:
-        return
-    from src.ui.planning_calendar_tabs import _render_readjustment_report
-    _reajust_report = st.session_state["weekday_reajust_report"]
-    if _reajust_report is None:
-        _reajust_report = pd.DataFrame()
-    _n_moved = len(_reajust_report)
-    with st.expander(
-        f"Assignacions canviades en la darrera regeneració ({_n_moved})",
-        expanded=bool(_n_moved),
-    ):
-        _render_readjustment_report(_reajust_report)
-
-
 def _machine_crosstab_table(rows: pd.DataFrame) -> pd.DataFrame | None:
     """Matriu facultatiu × màquina (amb columna Total, ordenada desc) a
     partir de files de màquina ja filtrades (ordinàries o peonades).
@@ -459,25 +361,10 @@ def _machine_crosstab_table(rows: pd.DataFrame) -> pd.DataFrame | None:
 
 
 def _secondary_slot_ids() -> set[str]:
-    """Slot_ids que són la màquina SECUNDÀRIA (vinculada) d'un parell —el
-    valor de `linked_to`. Prefereix els templates setmanals; si no, cau al
-    catàleg (legacy). En majúscules."""
-    tp = Path("data/weekday/weekly_slot_templates.csv")
-    if tp.exists() and tp.stat().st_size > 0:
-        try:
-            t = pd.read_csv(tp)
-            if "linked_to" in t.columns:
-                vals = t["linked_to"].fillna("").astype(str).str.strip().str.upper()
-                out = set(vals) - {"", "NAN", "NONE"}
-                if out:
-                    return out
-        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
-            pass
-    try:
-        from src.services.slot_catalog import slot_secondary_ids
-        return slot_secondary_ids(pd.read_csv("data/slot_catalog.csv"))
-    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
-        return set()
+    """Font única: slot_catalog.secondary_slot_ids_effective (templates
+    primer, catàleg com a fallback)."""
+    from src.services.slot_catalog import secondary_slot_ids_effective
+    return secondary_slot_ids_effective()
 
 
 def _render_machine_table(

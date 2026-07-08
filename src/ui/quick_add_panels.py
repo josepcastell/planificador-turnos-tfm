@@ -21,6 +21,7 @@ import pandas as pd
 import streamlit as st
 
 from src.domain.constants import ABSENCE_TYPES
+from src.domain.schedule_format import is_review_slot
 
 _SCHEDULE_PATH = Path("outputs/schedule_weekday.csv")
 
@@ -72,8 +73,8 @@ def _save_and_rerender(
 ) -> None:
     """Desa el calendari editat DIRECTAMENT, re-renderitza el PDF i refresca."""
     df.to_csv(_SCHEDULE_PATH, index=False)
-    from src.ui.planning_calendar_tabs import _export_general_weekday_pdf
-    _export_general_weekday_pdf(
+    from src.ui.planning_calendar_tabs import export_general_weekday_pdf
+    export_general_weekday_pdf(
         _SCHEDULE_PATH, professionals_path, pdf_output_dir, year, selected_months,
     )
     st.session_state.pop("weekday_live_schedule", None)
@@ -242,11 +243,13 @@ def _quick_toggle_peonada(year, professionals_path, pdf_output_dir, selected_mon
         occ = df.groupby(["day", "franja", "slot_id"])["professional"].transform("size")
         is_peonada = wmU == "PEONADA"
         # Ordinària → peonada: NP, no peonada, un sol facultatiu, no revisió.
+        # is_review_slot: la revisió es determina pel CATÀLEG (review=1), mai
+        # per la substring "REV" al nom (falsos positius/negatius).
         ord_to_peo = (
             (presU == "NO_PRESENCIAL")
             & ~is_peonada
             & has_prof
-            & (~slotU.str.contains("REV", na=False))
+            & (~slotU.map(is_review_slot))
             & (occ == 1)
         )
         # Peonada → ordinària: qualsevol fila ja marcada com a peonada.
@@ -306,7 +309,7 @@ def _quick_toggle_presentiality(year, professionals_path, pdf_output_dir, select
         slotU = df["slot_id"].str.strip().str.upper()
         elig = df[
             (df["professional"].str.strip() != "")
-            & (~slotU.str.contains("REV", na=False))
+            & (~slotU.map(is_review_slot))
             & (df["work_mode"].str.strip().str.upper() != "PEONADA")
         ]
         if elig.empty:

@@ -154,6 +154,33 @@ def slot_secondary_ids(catalog_df: pd.DataFrame) -> set[str]:
     return out
 
 
+def secondary_slot_ids_effective() -> set[str]:
+    """Slot_ids que són la màquina SECUNDÀRIA (el valor de `linked_to`)
+    d'alguna vinculació, llegits del workspace: prefereix els TEMPLATES
+    setmanals (font actual, per (dia, franja)); si no n'hi ha cap, cau al
+    catàleg (legacy). En majúscules. Font única per a la UI (mètriques i
+    editor de franges) — abans cada lloc tenia la seva pròpia versió i
+    podien discrepar per a la mateixa màquina."""
+    tp = Path("data/weekday/weekly_slot_templates.csv")
+    if tp.exists() and tp.stat().st_size > 0:
+        try:
+            t = pd.read_csv(tp)
+            if "linked_to" in t.columns:
+                vals = t["linked_to"].fillna("").astype(str).str.strip().str.upper()
+                out = set(vals) - {"", "NAN", "NONE"}
+                if out:
+                    return out
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+            pass
+    cat = Path("data/slot_catalog.csv")
+    if cat.exists() and cat.stat().st_size > 0:
+        try:
+            return slot_secondary_ids(pd.read_csv(cat))
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+            return set()
+    return set()
+
+
 def slot_linked_ids_from_templates(templates_df: pd.DataFrame) -> set[str]:
     """Slot_ids que apareixen com a **part d'alguna vinculació** als
     templates setmanals (`linked_to`). Inclou TANT el primari (slot_id
@@ -199,88 +226,6 @@ def slot_link_pairs(catalog_df: pd.DataFrame) -> list[tuple[str, str]]:
 
 # Nombre màxim de màquines per bloc vinculat (1 persona cobreix el bloc).
 MAX_LINKED_GROUP = 5
-
-
-def linked_groups(catalog_df: pd.DataFrame) -> list[list[str]]:
-    """BLOCS de màquines vinculades (una sola persona les cobreix, compten
-    com 1). Es deriven del camp `linked_to` del catàleg fent el tancament
-    TRANSITIU: si B→A i C→A, el bloc és [A, B, C]. Retorna la llista de blocs
-    (cada bloc = llista ordenada d'slot_ids, mida ≥ 2)."""
-    if catalog_df is None or catalog_df.empty or "linked_to" not in catalog_df.columns:
-        return []
-    valid = {
-        str(s).strip().upper()
-        for s in catalog_df["slot_id"].fillna("").astype(str)
-    } - {""}
-    parent: dict[str, str] = {}
-
-    def find(x: str) -> str:
-        parent.setdefault(x, x)
-        root = x
-        while parent[root] != root:
-            root = parent[root]
-        while parent[x] != root:
-            parent[x], x = root, parent[x]
-        return root
-
-    def union(a: str, b: str) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
-
-    for row in catalog_df.itertuples(index=False):
-        a = str(getattr(row, "slot_id", "") or "").strip().upper()
-        b = str(getattr(row, "linked_to", "") or "").strip().upper()
-        if a and b and a != b and b in valid:
-            union(a, b)
-
-    groups: dict[str, list[str]] = {}
-    for node in list(parent):
-        groups.setdefault(find(node), []).append(node)
-    return sorted([sorted(g) for g in groups.values() if len(g) >= 2])
-
-
-def set_linked_group(catalog_df: pd.DataFrame, members) -> pd.DataFrame:
-    """Vincula `members` (2..MAX_LINKED_GROUP) com un BLOC: tots apunten al
-    primer (representant) via `linked_to`. Neteja vinculacions prèvies dels
-    membres. Retorna el catàleg modificat (còpia)."""
-    df = catalog_df.copy()
-    if "linked_to" not in df.columns:
-        df["linked_to"] = ""
-    mem: list[str] = []
-    for m in members or []:
-        u = str(m).strip().upper()
-        if u and u not in mem:
-            mem.append(u)
-    mem = mem[:MAX_LINKED_GROUP]
-    if len(mem) < 2:
-        return df
-    rep = mem[0]
-    # Dissol primer QUALSEVOL bloc previ que contingui algun membre (així un
-    # slot que apuntava a un membre no queda enganxat al bloc nou).
-    to_clear: set = set(mem)
-    for g in linked_groups(df):
-        if any(x in mem for x in g):
-            to_clear.update(g)
-    upper = df["slot_id"].fillna("").astype(str).str.strip().str.upper()
-    df.loc[upper.isin(to_clear), "linked_to"] = ""
-    df.loc[upper.isin(mem[1:]), "linked_to"] = rep      # tots → representant
-    return df
-
-
-def clear_linked_group(catalog_df: pd.DataFrame, member: str) -> pd.DataFrame:
-    """Desvincula el BLOC que conté `member` (neteja `linked_to` de tots els
-    membres del bloc). Retorna el catàleg modificat (còpia)."""
-    df = catalog_df.copy()
-    if "linked_to" not in df.columns:
-        return df
-    m = str(member).strip().upper()
-    target = next((g for g in linked_groups(df) if m in g), None)
-    if not target:
-        return df
-    upper = df["slot_id"].fillna("").astype(str).str.strip().str.upper()
-    df.loc[upper.isin(target), "linked_to"] = ""
-    return df
 
 
 def slot_link_pairs_from_templates(templates_df: pd.DataFrame) -> list[tuple[str, str]]:

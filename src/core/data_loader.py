@@ -106,8 +106,3 @@ def load_weekday_data(
     }
 
 
-def load_guards_data(base_dir: str = "data/guards") -> dict:
-    base = Path(base_dir)
-    return {
-        "assignments": _read_csv_if_exists(base / "assignments.csv"),
-    }

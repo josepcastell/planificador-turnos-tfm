@@ -135,7 +135,13 @@ def _classify_unavailable_days(unavailability_df, professionals):
             guard_prof_days.add((pid, day))
         if reason in _QUOTA_NEUTRAL_REASONS:
             continue
-        absent[pid].add(day)  # absència / reforç / postguàrdia → no disponible
+        # Bloqueig PARCIAL (només una franja): l'altra franja del dia segueix
+        # sent assignable i ha de seguir comptant a quota/capacitat. Només
+        # els bloquejos de DIA SENCER (franja buida) són absències reals.
+        franja_val = str(getattr(row, "franja", "") or "").strip().upper()
+        if franja_val not in {"", "NAN", "NONE"}:
+            continue
+        absent[pid].add(day)  # absència / postguàrdia → dia sencer no disponible
     return absent, guard_prof_days
 
 
@@ -380,10 +386,13 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
     # Unió global de parelles (per a les equitats MENSUALS 477/608/627, on el
     # col·lapse de vinculats es manté global — imprecisió menor acceptada).
     slot_links = sorted({pair for pairs in links_by_wf.values() for pair in pairs})
+    # secondary_slot_ids NOMÉS s'usa per a l'exclusió de peonades: al
+    # recompte setmanal els slots vinculats es gestionen PER (dia, franja)
+    # dins _build_machine_term_specs (un filtre global els faria invisibles
+    # els dies que el vincle NO aplica → sobrecàrrega no comptada).
     secondary_slot_ids = set(data.get("slot_secondary_ids") or set())
     machine_specs = _build_machine_term_specs(
         keys_by_day, review_slots, links_by_wf=links_by_wf,
-        secondary_slot_ids=secondary_slot_ids,
     )
 
     # Flip presencial: el solver pot convertir un slot NO_PRESENCIAL ordinari
@@ -412,10 +421,12 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
                 continue
             for sk in _matching_preassignment_keys(r, slot_keys):
                 fixed_slot_keys.add(sk)
-    flippable_keys = [
-        sk for sk in {sk for sp in machine_specs.values() for sk in sp[4]}
+    # sorted: l'ordre d'iteració del set depèn del hash del procés i faria
+    # el model no reproduïble entre execucions.
+    flippable_keys = sorted(
+        sk for sk in {sk for sp in machine_specs.values() for sk in sp[3]}
         if sk not in fixed_slot_keys
-    ]
+    )
     pres_flip: dict = {}
     for p in professionals:
         if p == "NONE" or presence_mode_by_prof.get(p) == "NO_PRESENCIAL":
@@ -446,7 +457,11 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
             if not pid or pid == "NONE" or not value:
                 continue
             for item in value.split(";"):
-                sid = item.strip().upper()
+                # normalize_slot: les claus del solver (sk[2]) passen per
+                # _normalize_slots_df (espais/guions → '_'); sense la mateixa
+                # normalització aquí, un slot amb espai mai casaria i la
+                # posició 2 esdevindria cobertura dura obligatòria.
+                sid = normalize_slot(item)
                 if sid and sid not in {"NAN", "NONE"}:
                     marked_profs_by_slot_id.setdefault(sid, set()).add(pid)
     # Identifica pos2 condicionals: per a cada (day, franja, slot_id)
@@ -479,7 +494,7 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
         conditional_pos2_keys=conditional_pos2_keys,
     )
     _add_daily_compat_constraints(model, x, professionals, slot_rows, unique_days, review_slots,
-                                  slot_links=slot_links,
+                                  links_by_wf=links_by_wf,
                                   unlimited_professionals=fallback_professionals,
                                   pres_flip=pres_flip)
     _add_unavailability_constraints(model, x, slot_keys, unavailability_df, keys_by_day=keys_by_day)

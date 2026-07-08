@@ -84,3 +84,34 @@ TAB_SESSION_KEYS: dict[str, tuple[str, ...]] = {
     "generar": GENERAR,
     "metriques": METRIQUES,
 }
+
+# ── Famílies de claus DINÀMIQUES (per facultatiu, per signatura...) ────────
+# Aquests widgets tenen la clau parametritzada (p.ex. per professional_id),
+# així que no es poden llistar una a una. Si no es netegen en canviar de
+# sessió, l'estat vell del widget GUANYA sobre el valor llegit del disc de
+# la sessió nova i s'hi autodesa — contaminació creuada entre sessions.
+SESSION_SCOPED_KEY_PREFIXES: tuple[str, ...] = (
+    "allowed_areas_picker_",
+    "slot_doubled_picker_",
+    "absences_offdays_picker_",
+    "no_pres_weekdays_picker_",
+    "pres_weekdays_picker_",
+    "_autosave_sig_",
+    "fixed_calendar_link_",
+    "linkgrp_",
+)
+
+
+def clear_tab_session_state(session_state) -> None:
+    """Buida TOTS els drafts/cachés en memòria lligats a la sessió: les
+    claus registrades per pestanya i les famílies dinàmiques per prefix.
+    S'ha de cridar en canviar de sessió i en netejar-la."""
+    for keys in TAB_SESSION_KEYS.values():
+        for key in keys:
+            session_state.pop(key, None)
+    dynamic = [
+        key for key in list(session_state.keys())
+        if isinstance(key, str) and key.startswith(SESSION_SCOPED_KEY_PREFIXES)
+    ]
+    for key in dynamic:
+        session_state.pop(key, None)

@@ -1,3 +1,4 @@
+import re
 from datetime import date
 
 import pandas as pd
@@ -42,7 +43,7 @@ def clean_display_value(value) -> str:
 # busca "REVISIO_RM" al set però només hi té "REVISIO RM" → mai cap match.
 # Per evitar-ho, els setters i les funcions de lectura passen TOTS pel
 # mateix normalitzador.
-from src.core.utils import normalize_slot as _norm_slot
+from src.domain.slot_norm import normalize_slot as _norm_slot
 
 
 # Override d'àrea per slot, registrat des del catàleg (no depèn del nom).
@@ -107,13 +108,32 @@ def slot_comite_family(slot_id: str) -> str | None:
     return area if area and area != "ALTRES" else None
 
 
-def _area_palette_index(area: str, n: int = 6) -> int:
+# Paleta ÚNICA per àrea: CSS (styles.py), Excel (excel_export) i PDF
+# (export_monthly_pdfs) la importen d'aquí — mai més tres còpies mantingudes
+# a mà. L'ordre lliga amb les classes .schedule-area-c1..c6.
+AREA_PALETTE_HEX = (
+    "#DBEAFE", "#DCFCE7", "#EDE9FE", "#FEF3C7", "#FCE7F3", "#CCFBF1",
+)
+AREA_OTHER_HEX = "#F8FAFC"
+
+
+def _area_palette_index(area: str, n: int = len(AREA_PALETTE_HEX)) -> int:
     """Índex de color estable (1..n) per a una àrea qualsevol, sense cap nom
     predefinit. Determinista (no depèn de `hash()`)."""
     a = str(area).strip().upper()
     if not a:
         return 0
     return (sum((i + 1) * ord(c) for i, c in enumerate(a)) % n) + 1
+
+
+def area_palette_hex(area: str) -> str:
+    """Color de fons hex estable per a qualsevol àrea definida per
+    l'usuari; gris neutre sense àrea o 'ALTRES'."""
+    a = str(area).strip().upper()
+    idx = _area_palette_index(a)
+    if idx == 0 or a == "ALTRES":
+        return AREA_OTHER_HEX
+    return AREA_PALETTE_HEX[idx - 1]
 
 
 def calendar_display_area_class(area: str) -> str:
@@ -148,12 +168,23 @@ def calendar_display_franja_label(franja: str) -> str:
     return labels.get(value, value.title())
 
 
+_PID_SUFFIX_RE = re.compile(r"_\d+$")
+
+
+def base_pid(pid: str) -> str:
+    """Treu el sufix `_N` de duplicats (XX, XX_2 → XX). Per a mètriques i
+    filtres, els duplicats es comporten com el mateix facultatiu."""
+    return _PID_SUFFIX_RE.sub("", str(pid).strip().upper())
+
+
 def calendar_display_assignment_class(
     rows: list[dict[str, str]], slot_id: str, fallback_ids: set[str] | None = None
 ) -> str:
     presentialities = {clean_display_value(row.get("presentiality")).upper() for row in rows}
     work_modes = {clean_display_value(row.get("work_mode")).upper() for row in rows}
-    professionals = {clean_display_value(row.get("professional")).upper() for row in rows}
+    # base_pid: un comodí duplicat (TLD_2) també ha de casar amb el conjunt
+    # de fallback (col·lapsat per base).
+    professionals = {base_pid(clean_display_value(row.get("professional"))) for row in rows}
     # TLD (comodí) i peonades es marquen en vermell perquè ressaltin: són els
     # candidats naturals a un canvi manual al visualitzador.
     if professionals & (fallback_ids or set()):

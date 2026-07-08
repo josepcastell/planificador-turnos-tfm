@@ -16,8 +16,13 @@ def _load_simple_list(path: Path) -> list[str]:
         return []
     try:
         df = pd.read_csv(path)
-    except Exception:
-        return []
+    except Exception as exc:
+        # Mai silenciós: si retornem [] per un fitxer corrupte, el següent
+        # desat de l'editor SOBREESCRIURIA la llista real amb una de buida.
+        raise RuntimeError(
+            f"No s'ha pogut llegir «{path}» ({exc}). Restaura'l o esborra'l "
+            "perquè es torni a crear buit."
+        ) from exc
     if "nom" not in df.columns:
         return []
     values = (

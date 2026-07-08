@@ -17,17 +17,14 @@ from typing import Iterable
 
 import pandas as pd
 
-_MONTH_NAMES_CA = (
-    "", "gener", "febrer", "març", "abril", "maig", "juny",
-    "juliol", "agost", "setembre", "octubre", "novembre", "desembre",
-)
-
-
 def catalan_month_name(month: int) -> str:
-    """Nom del mes en català (1→'gener' … 12→'desembre'). Buit si està
-    fora de rang."""
-    m = int(month)
-    return _MONTH_NAMES_CA[m] if 1 <= m <= 12 else ""
+    """Nom del mes en català, en minúscules (1→'gener' … 12→'desembre').
+    Buit si està fora de rang. Font única: constants.CATALAN_MONTHS."""
+    from src.domain.constants import CATALAN_MONTHS
+    try:
+        return CATALAN_MONTHS.get(int(month), "").lower()
+    except (TypeError, ValueError):
+        return ""
 
 
 def catalan_months_label(months: Iterable[int]) -> str:
@@ -58,17 +55,3 @@ def in_logical_months(
     return (monday.dt.year == year) & (monday.dt.month.isin(months_set))
 
 
-def logical_month_weeks(year: int, month: int) -> list[list[date]]:
-    """Llista de setmanes ISO Mon-Sun el dilluns de les quals és a
-    (year, month). Cada setmana és una llista de 7 dates (Mon..Sun).
-    Útil per render de calendari."""
-    # Primer dilluns del mes (o el primer dia si és dilluns).
-    d = date(year, month, 1)
-    if d.weekday() != 0:
-        d = d + timedelta(days=(7 - d.weekday()) % 7)
-    weeks: list[list[date]] = []
-    while d.month == month:
-        week = [d + timedelta(days=i) for i in range(7)]
-        weeks.append(week)
-        d = d + timedelta(days=7)
-    return weeks

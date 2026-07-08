@@ -3,7 +3,6 @@ taula amb el nombre de PRES i NP_ord ordinàries de cada facultatiu
 per ajudar a veure si el calendari està equilibrat."""
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pandas as pd
@@ -12,16 +11,11 @@ import streamlit as st
 from src.domain.constants import GUARDS_RESERVED_SLOT_IDS
 from src.domain.month_scope import in_logical_months
 from src.domain.schedule_format import is_review_slot
+from src.services.professionals_info import (
+    base_pid as _base_pid,
+    fallback_professional_ids as _fallback_ids,
+)
 from src.services.slot_catalog import slot_secondary_ids
-
-
-_SUFFIX_RE = re.compile(r"_\d+$")
-
-
-def _base_pid(pid: str) -> str:
-    """Treu el sufix `_N` si el facultatiu té un duplicat (XX, XX_2 → XX).
-    Per a mètriques, els duplicats es comporten com el mateix facultatiu."""
-    return _SUFFIX_RE.sub("", str(pid).strip().upper())
 
 
 def _read_schedule_for_breakdown() -> tuple[pd.DataFrame, str]:
@@ -92,9 +86,9 @@ def render_target_breakdown_per_prof(
     schedule["_is_secondary"] = schedule["_sid"].isin(secondary)
     schedule["_is_guard"] = schedule["_sid"].isin(GUARDS_RESERVED_SLOT_IDS)
 
-    # Filtre TLD: el comodí pot tenir sufix de duplicat → comprovem el
-    # base_pid també.
-    fb_set = {"", "NONE", "NAN", "TLD"}
+    # Filtre del comodí: llegit de professionals.csv (fallback=1) via la
+    # font única — mai un id hardcoded, que divergia de la resta de l'app.
+    fb_set = {"", "NONE", "NAN"} | _fallback_ids()
     machine = schedule[
         ~schedule["_is_review"]
         & ~schedule["_is_secondary"]

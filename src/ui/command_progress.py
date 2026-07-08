@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 import streamlit as st
 
@@ -46,6 +47,10 @@ def run_steps_with_progress(steps, action_name: str, total_steps: int = 4, conta
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            # cwd EXPLÍCIT: el subprocess (solver/exports) llegeix i escriu
+            # amb paths relatius (data/, outputs/) — ha d'heretar el
+            # workspace de l'app, mai el cwd accidental del procés pare.
+            cwd=str(Path.cwd()),
         )
         if proc.stdout is not None:
             for line in proc.stdout:

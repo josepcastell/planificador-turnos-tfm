@@ -23,6 +23,28 @@ def _format_snapshot_name(name: str) -> str:
         return name
 
 
+def _confirmed_button(label: str, key: str, help_text: str, warn_text: str) -> bool:
+    """Botó destructiu amb confirmació de dos passos: el primer clic arma
+    la confirmació (avís + Sí/Cancel·lar); només el segon clic executa."""
+    armed_key = f"{key}_armed"
+    if not st.session_state.get(armed_key):
+        if st.sidebar.button(label, width="stretch", key=key, help=help_text):
+            st.session_state[armed_key] = True
+            st.rerun()
+        return False
+    st.sidebar.warning(warn_text)
+    col_yes, col_no = st.sidebar.columns(2)
+    confirmed = col_yes.button(
+        "Sí, endavant", type="primary", width="stretch", key=f"{key}_yes",
+    )
+    if col_no.button("Cancel·lar", width="stretch", key=f"{key}_no"):
+        st.session_state.pop(armed_key, None)
+        st.rerun()
+    if confirmed:
+        st.session_state.pop(armed_key, None)
+    return confirmed
+
+
 def render_session_sidebar_actions(session_dir: Path) -> SessionSidebarActions:
     st.sidebar.caption(f"Activa: {session_dir.name}")
 
@@ -49,19 +71,21 @@ def render_session_sidebar_actions(session_dir: Path) -> SessionSidebarActions:
     cleanup_clicked = False
     delete_session_clicked = False
     if session_dir.exists():
-        cleanup_clicked = st.sidebar.button(
+        cleanup_clicked = _confirmed_button(
             "Netejar sessió",
-            width="stretch",
             key="cleanup_session_button",
-            help="Esborra totes les entrades de la sessió actual i deixa el "
-                 "workspace en estat inicial (fitxers buits amb les capçaleres).",
+            help_text="Esborra totes les entrades de la sessió actual i deixa el "
+                      "workspace en estat inicial (fitxers buits amb les capçaleres).",
+            warn_text="Es buidaran **totes** les entrades de la sessió actual. "
+                      "Aquesta acció no es pot desfer.",
         )
-        delete_session_clicked = st.sidebar.button(
+        delete_session_clicked = _confirmed_button(
             "🗑️ Eliminar sessió",
-            width="stretch",
             key="delete_session_button",
-            help="Elimina permanentment aquesta sessió guardada (carpeta + "
-                 "totes les seves versions). Acció no reversible.",
+            help_text="Elimina permanentment aquesta sessió guardada (carpeta + "
+                      "totes les seves versions). Acció no reversible.",
+            warn_text=f"S'eliminarà **{session_dir.name}** amb totes les seves "
+                      "versions guardades. Aquesta acció no es pot desfer.",
         )
 
     return SessionSidebarActions(

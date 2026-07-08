@@ -19,12 +19,12 @@ def _sk(day, franja, slot_id, presentiality="NO_PRESENCIAL", work_mode="NORMAL",
 class TestReviewSlotsExcluded:
     def test_review_slot_not_in_flippable(self):
         # Un slot de revisio NO ha d'entrar a flippable_machine_keys
-        # (la 5a entrada del tuple specs).
+        # (la 4a entrada del tuple specs).
         review_sk = _sk("2026-01-06", "MATI", "REVISA_RM", "NO_PRESENCIAL")
         normal_sk = _sk("2026-01-06", "MATI", "RM_A", "NO_PRESENCIAL")
         keys_by_day = {"2026-01-06": [review_sk, normal_sk]}
         specs = _build_machine_term_specs(keys_by_day, review_slots={"REVISA_RM"})
-        coupling, uncoupled, machine, presential, flippable = specs["2026-01-06"]
+        coupling, machine, presential, flippable = specs["2026-01-06"]
         assert review_sk not in flippable
         # El normal SI hi és (no és revisió ni guàrdia, és NORMAL NO_PRES).
         assert normal_sk in flippable
@@ -36,7 +36,7 @@ class TestReviewSlotsExcluded:
         normal_sk = _sk("2026-01-06", "MATI", "RM_A", "PRESENCIAL")
         keys_by_day = {"2026-01-06": [review_sk, normal_sk]}
         specs = _build_machine_term_specs(keys_by_day, review_slots={"REVISA_RM"})
-        coupling, uncoupled, machine, presential, flippable = specs["2026-01-06"]
+        coupling, machine, presential, flippable = specs["2026-01-06"]
         assert review_sk not in machine
         assert normal_sk in machine
 
@@ -47,7 +47,7 @@ class TestReviewSlotsExcluded:
         review_sk = _sk("2026-01-06", "MATI", "REVISA_RM", "PRESENCIAL")
         keys_by_day = {"2026-01-06": [review_sk]}
         specs = _build_machine_term_specs(keys_by_day, review_slots={"REVISA_RM"})
-        coupling, uncoupled, machine, presential, flippable = specs["2026-01-06"]
+        coupling, machine, presential, flippable = specs["2026-01-06"]
         assert review_sk not in presential
 
     def test_review_slot_excluded_regardless_of_case(self):
@@ -57,7 +57,7 @@ class TestReviewSlotsExcluded:
         review_sk = _sk("2026-01-06", "MATI", "REVISA_TC")
         keys_by_day = {"2026-01-06": [review_sk]}
         specs = _build_machine_term_specs(keys_by_day, review_slots={"REVISA_TC"})
-        _coupling, _uncoupled, machine, presential, flippable = specs["2026-01-06"]
+        _coupling, machine, presential, flippable = specs["2026-01-06"]
         assert not machine
         assert not presential
         assert not flippable

@@ -86,7 +86,15 @@ class PlanningRules:
             return cls()
         try:
             return cls.from_dataframe(pd.read_csv(path))
-        except Exception:
+        except Exception as exc:
+            # Mai silenciós: unes regles corruptes farien planificar amb
+            # targets per defecte sense que ningú ho sabés.
+            import sys
+            print(
+                f"AVIS: {path} il·legible ({exc}); s'apliquen les regles "
+                "d'equilibri per defecte.",
+                file=sys.stderr,
+            )
             return cls()
 
     # ── convenience ────────────────────────────────────────────────────────────

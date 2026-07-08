@@ -10,7 +10,7 @@ from src.services.calendar_inputs import (
     overrides_to_manual_editor,
     save_base_calendar_overrides,
 )
-from src.tools.load_public_holidays_csv import load_public_holidays_from_csv
+from src.services.public_holidays_csv import load_public_holidays_from_csv
 from src.ui.table_state import (
     autosave_draft_if_changed,
     data_editor_height,
@@ -86,42 +86,49 @@ def render_holidays_editor(
         try:
             upload_key = f"{year}:{uploaded_holidays_csv.name}:{uploaded_holidays_csv.size}"
             should_process_upload = st.session_state.get("processed_holidays_upload") != upload_key
+            # El fitxer es processa UNA SOLA vegada: si el bloc de merge+desat
+            # corregués a cada rerun (el uploader conserva el fitxer), els
+            # festius que l'usuari esborra de la taula ressuscitarien
+            # immediatament des del CSV carregat.
             if should_process_upload:
                 tmp_holidays_path.write_bytes(uploaded_holidays_csv.getvalue())
-            holidays_df = load_public_holidays_from_csv(tmp_holidays_path, year)
-            if holidays_df.empty:
-                st.warning(f"No s'han trobat festius per a l'any {year} dins del CSV.")
-            else:
-                export_holidays_path = Path(f"data/derived/public_holidays_{year}.csv")
-                export_holidays_path.parent.mkdir(parents=True, exist_ok=True)
-                holidays_df.to_csv(export_holidays_path, index=False)
-                # Merge into the manual overrides table so they show up there too.
-                csv_rows = pd.DataFrame({
-                    "day": pd.to_datetime(holidays_df["day"], errors="coerce"),
-                    "tipus": "Festiu oficial manual",
-                    "notes": holidays_df.get("location", "").astype(str),
-                })
-                merged = pd.concat(
-                    [overrides_editor_source, csv_rows], ignore_index=True,
-                )
-                merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
-                merged = (
-                    merged.dropna(subset=["day"])
-                    .drop_duplicates(subset=["day"], keep="first")
-                    .sort_values("day")
-                    .reset_index(drop=True)
-                )
-                save_base_calendar_overrides(base_calendar_overrides_path, merged)
-                st.session_state.pop("base_calendar_overrides_draft", None)
-                st.session_state.pop("base_calendar_overrides_draft_signature", None)
-                st.session_state["step_public_holidays"] = True
-                for key in WORKFLOW_KEYS:
-                    if key != "step_public_holidays":
-                        st.session_state[key] = False
-                st.session_state["processed_holidays_upload"] = upload_key
-                st.success(f"Festius oficials carregats per a {year}: {len(holidays_df)}")
-                if should_process_upload:
+                holidays_df = load_public_holidays_from_csv(tmp_holidays_path, year)
+                if holidays_df.empty:
+                    st.warning(f"No s'han trobat festius per a l'any {year} dins del CSV.")
+                else:
+                    export_holidays_path = Path(f"data/derived/public_holidays_{year}.csv")
+                    export_holidays_path.parent.mkdir(parents=True, exist_ok=True)
+                    holidays_df.to_csv(export_holidays_path, index=False)
+                    # Merge into the manual overrides table so they show up there too.
+                    csv_rows = pd.DataFrame({
+                        "day": pd.to_datetime(holidays_df["day"], errors="coerce"),
+                        "tipus": "Festiu oficial manual",
+                        "notes": holidays_df.get("location", "").astype(str),
+                    })
+                    merged = pd.concat(
+                        [overrides_editor_source, csv_rows], ignore_index=True,
+                    )
+                    merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
+                    merged = (
+                        merged.dropna(subset=["day"])
+                        .drop_duplicates(subset=["day"], keep="first")
+                        .sort_values("day")
+                        .reset_index(drop=True)
+                    )
+                    save_base_calendar_overrides(base_calendar_overrides_path, merged)
+                    st.session_state.pop("base_calendar_overrides_draft", None)
+                    st.session_state.pop("base_calendar_overrides_draft_signature", None)
+                    st.session_state["step_public_holidays"] = True
+                    for key in WORKFLOW_KEYS:
+                        if key != "step_public_holidays":
+                            st.session_state[key] = False
+                    st.session_state["processed_holidays_upload"] = upload_key
                     st.rerun()
+            else:
+                st.success(
+                    "Festius del CSV ja incorporats a la taula. Pots editar-la "
+                    "o esborrar-ne files lliurement."
+                )
         except Exception as e:
             st.error(f"No s'ha pogut llegir el CSV de festius: {e}")
 

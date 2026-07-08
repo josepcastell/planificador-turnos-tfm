@@ -18,6 +18,8 @@ from openpyxl.worksheet.properties import PageSetupProperties
 
 from src.domain.constants import GUARDS_RESERVED_SLOT_IDS
 from src.domain.schedule_format import (
+    AREA_OTHER_HEX,
+    area_palette_hex,
     calendar_display_slot_area,
     calendar_display_slot_sort_key,
     is_review_slot,
@@ -30,17 +32,7 @@ _BASE_COLS = [
 
 # Estils visuals (fons + colors de text consistents amb el PDF).
 _FILL_HEADER = PatternFill("solid", fgColor="334155")
-# Paleta estable per àrea (mateixos colors/ordre que _AREA_PDF_PALETTE i les
-# classes CSS .schedule-area-c1..c6).
-_AREA_FILL_PALETTE = (
-    PatternFill("solid", fgColor="DBEAFE"),
-    PatternFill("solid", fgColor="DCFCE7"),
-    PatternFill("solid", fgColor="EDE9FE"),
-    PatternFill("solid", fgColor="FEF3C7"),
-    PatternFill("solid", fgColor="FCE7F3"),
-    PatternFill("solid", fgColor="CCFBF1"),
-)
-_FILL_AREA_OTHER = PatternFill("solid", fgColor="F8FAFC")
+_FILL_AREA_OTHER = PatternFill("solid", fgColor=AREA_OTHER_HEX.lstrip("#"))
 _FILL_PEONADA = PatternFill("solid", fgColor="FFF0C2")
 _FILL_FESTIU = PatternFill("solid", fgColor="E5E7EB")
 _FILL_LABEL = PatternFill("solid", fgColor="F1F5F9")
@@ -56,11 +48,8 @@ _ALIGN_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True
 
 
 def _area_fill(area: str) -> PatternFill:
-    a = (area or "").strip().upper()
-    if not a or a == "ALTRES":
-        return _FILL_AREA_OTHER
-    idx = sum((i + 1) * ord(c) for i, c in enumerate(a)) % len(_AREA_FILL_PALETTE)
-    return _AREA_FILL_PALETTE[idx]
+    # Paleta única a domain (schedule_format.area_palette_hex).
+    return PatternFill("solid", fgColor=area_palette_hex(area).lstrip("#"))
 
 
 def _read_csv_safe(path: Path) -> pd.DataFrame:

@@ -106,19 +106,57 @@ def _accumulate_counts_by_presentiality(
     exclude_work_modes: tuple[str, ...] = (),
 ) -> dict[str, int]:
     """Comptador per facultatiu d'slots amb la presencialitat indicada,
-    col·lapsant parells vinculats com fa la UI (un OR per (dia, parell-
-    canònic)). Es fa servir entre mesos perquè el solver del mes N rebi
-    l'acumulat dels mesos anteriors."""
-    from src.services.slot_catalog import slot_link_pairs, load_slot_catalog
+    col·lapsant els BLOCS vinculats com fa el solver: per (dia-setmana,
+    franja) segons els templates (+ vincles globals del catàleg), amb
+    tancament transitiu. Es fa servir entre mesos perquè el solver del
+    mes N rebi l'acumulat dels mesos anteriors."""
+    from src.domain.constants import WEEKDAY_CODES
+    from src.services.slot_catalog import (
+        load_slot_catalog,
+        slot_link_pairs,
+        slot_link_pairs_by_weekday_franja,
+    )
+    from src.solver.constraints import _slot_groups_from_pairs
+
+    import sys as _sys
+    links_by_wf: dict = {}
+    try:
+        tdf = pd.read_csv("data/weekday/weekly_slot_templates.csv")
+        links_by_wf = {
+            k: list(v) for k, v in slot_link_pairs_by_weekday_franja(tdf).items()
+        }
+    except Exception as _exc:
+        links_by_wf = {}
+        print(
+            f"AVIS: no s'han pogut llegir les vinculacions dels templates ({_exc}); "
+            "l'equitat acumulada entre mesos comptara els vinculats per separat.",
+            file=_sys.stderr,
+        )
     try:
         catalog = load_slot_catalog(Path("data/slot_catalog.csv"))
-        pairs = slot_link_pairs(catalog)
-    except Exception:
-        pairs = []
-    link_partner = {}
-    for a, b in pairs:
-        link_partner[str(a).strip().upper()] = str(b).strip().upper()
-        link_partner[str(b).strip().upper()] = str(a).strip().upper()
+        global_pairs = list(slot_link_pairs(catalog))
+    except Exception as _exc:
+        global_pairs = []
+        print(
+            f"AVIS: no s'ha pogut llegir el cataleg ({_exc}); vinculacions "
+            "globals ignorades a l'acumulat entre mesos.",
+            file=_sys.stderr,
+        )
+
+    canon_cache: dict = {}
+
+    def _canon_map(wd: str, fr: str) -> dict:
+        key = (wd, fr)
+        if key not in canon_cache:
+            pairs = list(links_by_wf.get(key, [])) + global_pairs
+            mapping: dict = {}
+            for block in _slot_groups_from_pairs(pairs):
+                canon = min(block)
+                for s in block:
+                    mapping[str(s).strip().upper()] = canon
+            canon_cache[key] = mapping
+        return canon_cache[key]
+
     review_upper = {str(s).strip().upper() for s in (review_slots or set())}
     target_upper = str(target_presentiality).strip().upper()
     exclude_wm = {str(w).strip().upper() for w in (exclude_work_modes or ())}
@@ -140,9 +178,14 @@ def _accumulate_counts_by_presentiality(
                 continue
             if sid in review_upper or wm in exclude_wm:
                 continue
-            partner = link_partner.get(sid)
-            canon = min(sid, partner) if partner else sid
-            key = (prof, str(r.get("day", "")), canon)
+            day_str = str(r.get("day", ""))
+            try:
+                wd = WEEKDAY_CODES[pd.Timestamp(day_str).weekday()]
+            except (ValueError, TypeError):
+                wd = ""
+            fr = str(r.get("franja", "") or "").strip().upper()
+            canon = _canon_map(wd, fr).get(sid, sid)
+            key = (prof, day_str, canon)
             if key in seen_groups:
                 continue
             seen_groups.add(key)
@@ -231,6 +274,14 @@ def generate_weekday(
             exclude_work_modes=("PEONADA",),
         )
         month_common["prior_no_presential_counts"] = prior_nopres
+        # Acumulat d'ORDINÀRIES (PRES + NP sense peonades) per a l'equitat
+        # acumulada del tram 4 (`cum_tot_l1`/`cum_tot_linf` a core.py) — el
+        # solver llegeix `prior_total_machine_counts`; sense aquesta clau
+        # l'equitat acumulada d'ordinàries és un no-op silenciós.
+        month_common["prior_total_machine_counts"] = {
+            p: prior_pres.get(p, 0) + prior_nopres.get(p, 0)
+            for p in set(prior_pres) | set(prior_nopres)
+        }
         # Warm-start: sembra el solver amb el calendari anterior d'aquest
         # mes (hints, sense forçar) perquè el millori en lloc de recomençar.
         warm_month = None

@@ -27,30 +27,6 @@ def load_facultatiu_targets(path: Path) -> pd.DataFrame:
     return df.drop_duplicates(subset=["professional_id"], keep="last")
 
 
-def save_facultatiu_targets(path: Path, edited: pd.DataFrame) -> int:
-    """Desa només les cel·les amb valor (no buides). `edited` té
-    columnes Facultatiu, Pres./setm. (obj.), No-pres./setm. (obj.).
-    Cel·la buida = cap objectiu (no condiciona el solver). Retorna el
-    nombre de facultatius amb algun objectiu desat."""
-    rows = []
-    for rec in edited.to_dict(orient="records"):
-        prof = str(rec.get("Facultatiu", "")).strip().upper()
-        if not prof or prof in {"NONE", "NAN"}:
-            continue
-        tp = _as_int(rec.get("Pres./setm. (obj.)"))
-        tnp = _as_int(rec.get("No-pres./setm. (obj.)"))
-        if tp is None and tnp is None:
-            continue
-        rows.append({
-            "professional_id": prof,
-            "target_presential": "" if tp is None else tp,
-            "target_no_presential": "" if tnp is None else tnp,
-        })
-    out = pd.DataFrame(rows, columns=FACULTATIU_TARGETS_COLUMNS)
-    save_table(Path(path), out, FACULTATIU_TARGETS_COLUMNS)
-    return len(out)
-
-
 def _as_int(value) -> int | None:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None

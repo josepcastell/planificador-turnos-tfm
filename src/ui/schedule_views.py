@@ -10,66 +10,6 @@ from src.services.metrics_summary import load_schedule_for_display
 from src.ui.calendar_html import render_schedule_calendar_html
 
 
-def show_csv(path_str: str, title: str) -> None:
-    path = Path(path_str)
-    if path.exists() and path.stat().st_size > 0:
-        st.subheader(title)
-
-        if path.name == "schedule.csv":
-            df = load_schedule_for_display(path_str)
-        else:
-            df = pd.read_csv(path)
-
-        st.dataframe(df, width="stretch")
-    else:
-        st.info(f"No existe o està buit: {path_str}")
-
-
-def render_generated_schedule_view(
-    path: Path,
-    title: str,
-    selected_year: int,
-    months_to_show: list[int],
-    key_prefix: str,
-    visible_weekdays: list[int] | None = None,
-    fixed_month: int | None = None,
-) -> None:
-    st.subheader(title)
-    if not path.exists() or path.stat().st_size == 0:
-        st.info("Encara no hi ha cap calendari generat per aquesta part.")
-        return
-    schedule_df = load_schedule_for_display(str(path))
-    if schedule_df is None or schedule_df.empty:
-        st.info("El fitxer existeix, però no conté assignacions.")
-        return
-
-    visible_df = schedule_df[schedule_df["professional"].astype(str) != "NONE"].copy()
-    if visible_df.empty:
-        st.info("El calendari generat no conté facultatius assignats.")
-        return
-
-    view_month = fixed_month or (months_to_show[0] if months_to_show else 1)
-    if fixed_month is None and len(months_to_show) > 1:
-        view_month = st.selectbox(
-            "Mes",
-            months_to_show,
-            format_func=lambda month_num: f"{CATALAN_MONTHS.get(month_num, month_num)} {selected_year}",
-            key=f"{key_prefix}_month",
-        )
-
-    st.markdown(
-        render_schedule_calendar_html(
-            visible_df,
-            int(selected_year),
-            int(view_month),
-            Path(f"data/base_calendar_{selected_year}.csv"),
-            Path(f"data/derived/public_holidays_{selected_year}.csv"),
-            visible_weekdays=visible_weekdays,
-        ),
-        unsafe_allow_html=True,
-    )
-
-
 def calendar_schedule_editor(
     schedule_df: pd.DataFrame,
     editor_cols: list[str],

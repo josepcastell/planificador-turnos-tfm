@@ -24,12 +24,5 @@ def load_calendar_settings(path: Path) -> dict:
     return {**DEFAULTS, **data}
 
 
-def save_calendar_settings(path: Path, settings: dict) -> None:
-    out = {**DEFAULTS, **settings}
-    out["default_required_staff"] = max(1, int(out.get("default_required_staff", 1) or 1))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
 def default_required_staff(path: Path = Path("data/calendar_settings.json")) -> int:
     return max(1, int(load_calendar_settings(path).get("default_required_staff", 1) or 1))

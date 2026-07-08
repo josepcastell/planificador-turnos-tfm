@@ -86,16 +86,12 @@ render_update_panel(Path(__file__).resolve().parent)
 with st.sidebar.expander("⏻ Tancar el programa", expanded=False):
     st.caption("Atura el programa. Després ja pots tancar la pestanya del navegador.")
     if st.button("Tancar ara", key="app_exit_btn", width="stretch"):
-        st.success("Programa aturat. Ja pots tancar aquesta pestanya del navegador.")
-        import threading as _threading
-        import time as _time
-
-        def _shutdown_server() -> None:
-            _time.sleep(1.0)  # deixa que el missatge arribi al navegador
-            os._exit(0)
-
-        _threading.Thread(target=_shutdown_server, daemon=True).start()
-        st.stop()
+        # NO aturem aquí: deixem que el run continuï fins al final perquè
+        # els autosaves dels editors d'aquest mateix rerun (l'última edició
+        # de l'usuari) s'apliquin abans d'apagar. El tancament real es fa
+        # al FINAL d'app.py.
+        st.session_state["_app_exit_requested"] = True
+        st.success("Desant i aturant el programa…")
 
 DEFAULT_YEAR = 2026
 DEFAULT_MONTH = 1
@@ -215,6 +211,41 @@ def load_session_folder(session_dir: Path, year: int, month: int) -> int:
     return session_store.load_session_folder(session_dir, year, month, PDF_OUTPUT_DIR)
 
 
+def sync_workspace_to_loaded_session() -> None:
+    """Desa el workspace a la sessió CARREGADA actualment (la que es deixa)
+    abans de substituir-lo per una altra sessió o de resetejar-lo. Sense
+    això, canviar de sessió, de títol o d'any perdria tota la feina feta
+    des de l'últim «Generar» (el workspace s'autodesa a disc, però només
+    es copiava a la carpeta de sessió en generar)."""
+    prev = st.session_state.get("loaded_session_dir")
+    if not prev:
+        return
+    prev_dir = Path(prev)
+    if not prev_dir.exists():
+        return
+    meta = session_store.read_session_metadata(prev_dir)
+    _, name_year = infer_section_year_from_session_name(prev_dir.name)
+    try:
+        prev_year = int(meta.get("year", name_year))
+    except (TypeError, ValueError):
+        prev_year = name_year
+    try:
+        session_store.save_session_folder(
+            prev_dir,
+            prev_year,
+            DEFAULT_MONTH,
+            meta.get("section", ""),
+            LAST_SESSION_PATH,
+            PDF_OUTPUT_DIR,
+            include_generated=True,
+        )
+    except OSError:
+        st.warning(
+            f"No s'ha pogut sincronitzar la sessió anterior «{prev_dir.name}» "
+            "abans de canviar. Revisa que cap fitxer no estigui obert a Excel."
+        )
+
+
 def delete_current_session_workspace(session_dir: Path, year: int, month: int) -> int:
     return session_store.delete_current_session_workspace(session_dir, year, month, PDF_OUTPUT_DIR)
 
@@ -301,6 +332,7 @@ if _carry_pre is None and last_session_dir and last_session_dir.exists() and las
 if session_identity_changed and not default_session_dir.exists():
     create_empty_session_folder(default_session_dir, year, carry_forward_source=_carry_pre)
     if not preserve_working_state:
+        sync_workspace_to_loaded_session()
         session_store.reset_current_workspace_for_new_session(year)
         load_session_folder(default_session_dir, year, DEFAULT_MONTH)
         set_workflow_state(False)
@@ -347,6 +379,7 @@ if not session_dir.exists():
     # No existeix: la creem (és nova, o canvi de títol/any sense pre-existent).
     create_empty_session_folder(session_dir, year, carry_forward_source=carry_forward_source_dir)
     if not preserve_working_state:
+        sync_workspace_to_loaded_session()
         session_store.reset_current_workspace_for_new_session(year)
         load_session_folder(session_dir, year, DEFAULT_MONTH)
         set_workflow_state(False)
@@ -366,14 +399,28 @@ else:
     # ha canviat (títol/any). En boot amb workspace ja poblat, preservem.
     needs_load = _session_changed and not preserve_working_state
     if needs_load:
+        sync_workspace_to_loaded_session()
         load_session_folder(session_dir, year, DEFAULT_MONTH)
         write_last_session_name(session_dir)
         set_workflow_state(False)
-        # Buidar drafts en memòria perquè els editors rellegeixin del disc.
-        from src.ui.session_keys import TAB_SESSION_KEYS as _TAB_KEYS_LOAD
-        for _keys in _TAB_KEYS_LOAD.values():
-            for _k in _keys:
-                st.session_state.pop(_k, None)
+        # Buidar drafts en memòria (incloses les claus per-facultatiu)
+        # perquè els editors rellegeixin del disc de la sessió nova.
+        from src.ui.session_keys import clear_tab_session_state as _clear_keys
+        _clear_keys(st.session_state)
+
+# Avís de col·lisió de noms: títols diferents poden sanejar-se a la MATEIXA
+# carpeta («Equip TC» i «Equip.TC» → Equip_TC_2026) i compartirien dades.
+_manifest_section = session_store.read_session_metadata(session_dir).get("section", "")
+if (
+    _manifest_section
+    and section_name.strip()
+    and _manifest_section.strip().lower() != section_name.strip().lower()
+):
+    st.sidebar.warning(
+        f"Aquesta sessió es va crear amb el títol «{_manifest_section}» i el "
+        f"títol actual és «{section_name.strip()}». Si són seccions diferents, "
+        "fes servir títols que no coincideixin en lletres i números."
+    )
 
 # Registrem la sessió carregada per a la propera rerunada.
 st.session_state[_loaded_key] = _loaded_now
@@ -466,10 +513,8 @@ if sidebar_actions.cleanup_clicked:
     _sl([])
     # Buidar TOTS els drafts/cachés en memòria de les pestanyes principals
     # (altrament podrien repoblar els fitxers que acabem de buidar).
-    from src.ui.session_keys import TAB_SESSION_KEYS as _TAB_KEYS
-    for _keys in _TAB_KEYS.values():
-        for _k in _keys:
-            st.session_state.pop(_k, None)
+    from src.ui.session_keys import clear_tab_session_state as _clear_keys
+    _clear_keys(st.session_state)
     st.sidebar.success(f"Sessió netejada ({deleted} fitxers esborrats)")
     st.rerun()
 
@@ -545,6 +590,10 @@ with _save_col:
         help="Crea una còpia datada de la sessió actual a `_snapshots/`. "
              "Es pot restaurar des de la barra lateral.",
     ):
+        # Primer sincronitzem el treball ACTUAL del workspace a la carpeta
+        # de sessió: sense això, la versió fotografiaria l'estat de l'últim
+        # «Generar», no el d'ara mateix.
+        save_session_folder(session_dir, year, month)
         _snapshot_path = session_store.create_session_snapshot(session_dir)
         if _snapshot_path is not None:
             st.toast(
@@ -858,5 +907,24 @@ with final_metrics_tab:
         PDF_OUTPUT_DIR,
         professionals_path,
     )
+
+# ── Tancament segur (botó «⏻ Tancar el programa» del sidebar) ──────────────
+# S'executa al FINAL del run: tots els autosaves dels editors d'aquest
+# mateix rerun ja s'han aplicat, i el workspace se sincronitza a la sessió
+# abans d'apagar el servidor.
+if st.session_state.pop("_app_exit_requested", False):
+    try:
+        save_session_folder(session_dir, year, month)
+    except OSError:
+        pass  # apagar igualment: el workspace a disc ja té els autosaves
+    st.sidebar.success("Programa aturat. Ja pots tancar aquesta pestanya.")
+    import threading as _threading
+    import time as _time
+
+    def _shutdown_server() -> None:
+        _time.sleep(1.0)  # deixa que el missatge arribi al navegador
+        os._exit(0)
+
+    _threading.Thread(target=_shutdown_server, daemon=True).start()
 
 st.stop()

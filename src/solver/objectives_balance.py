@@ -4,6 +4,7 @@ les penalitzacions de "spread" entre facultatius actius."""
 
 from src.domain.constants import GUARDS_RESERVED_SLOT_IDS
 from src.domain.schedule_format import slot_metric_family
+from src.solver.constraints import _slot_groups_from_pairs
 from src.solver.normalize import _make_slot_key, _norm_set
 
 
@@ -56,11 +57,17 @@ def _add_count_balance(model, x, active_professionals, professionals, slot_keys,
              cum_l1, cum_linf, cum_max, cum_min, cum_target_per_p)."""
     slot_links = slot_links or []
     extra_terms_by_prof = extra_terms_by_prof or {}
-    link_partner: dict[str, str] = {}
-    for a, b in slot_links:
-        au, bu = str(a).strip().upper(), str(b).strip().upper()
-        link_partner[au] = bu
-        link_partner[bu] = au
+    # Tancament TRANSITIU: amb cadenes (A,B)+(B,C) el bloc sencer [A,B,C]
+    # ha de compartir clau canònica — un dict simple de partners
+    # sobreescriuria B i partiria el bloc en 2 grups mentre l'acoblament
+    # dur força 1 sola persona.
+    link_canon: dict[str, str] = {}
+    for block in _slot_groups_from_pairs(
+        (str(a).strip().upper(), str(b).strip().upper()) for a, b in slot_links
+    ):
+        canon = min(block)
+        for s in block:
+            link_canon[s] = canon
 
     exclude_wm = {str(w).strip().upper() for w in (exclude_work_modes or ())}
     # Defensa: si un slot de revisio acaba al slot_keys amb presentiality
@@ -77,10 +84,9 @@ def _add_count_balance(model, x, active_professionals, professionals, slot_keys,
 
     def _group_key(sk):
         sid = str(sk[2]).strip().upper()
-        partner = link_partner.get(sid)
-        if partner is None:
+        canon = link_canon.get(sid)
+        if canon is None:
             return (sk[0], sid, sk[4], sk[5])
-        canon = min(sid, partner)
         return (sk[0], "__LINK__", canon, sk[4], sk[5])
 
     groups: dict = {}
@@ -144,7 +150,11 @@ def _add_count_balance(model, x, active_professionals, professionals, slot_keys,
     cum_target_by_p: dict = {}
     if actius and prior:
         sum_prior = sum(int(prior.get(p, 0) or 0) for p in actius)
-        total_acum = sum_prior + max_p
+        # target_base (grups reals del mes), NO max_p (que inclou el màxim
+        # teòric de flips): amb el target inflat, tots els acumulats queden
+        # per sota i el terme L1 perd el gradient (qualsevol repartiment
+        # costa gairebé igual).
+        total_acum = sum_prior + target_base
         ub_acum = max(1, total_acum + 1)
         cumulative = {}
         for p in actius:
@@ -226,11 +236,15 @@ def _add_ordinary_machine_balance(model, x, active_professionals, professionals,
     slot_links = slot_links or []
     review = _norm_set(review_slots)
     peonada_vars = peonada_vars or {}
-    link_partner: dict[str, str] = {}
-    for a, b in slot_links:
-        au, bu = str(a).strip().upper(), str(b).strip().upper()
-        link_partner[au] = bu
-        link_partner[bu] = au
+    # Tancament TRANSITIU (vegeu _add_count_balance): un bloc encadenat
+    # comparteix una única clau canònica.
+    link_canon: dict[str, str] = {}
+    for block in _slot_groups_from_pairs(
+        (str(a).strip().upper(), str(b).strip().upper()) for a, b in slot_links
+    ):
+        canon = min(block)
+        for s in block:
+            link_canon[s] = canon
 
     machine_keys = [
         sk for sk in slot_keys
@@ -255,10 +269,9 @@ def _add_ordinary_machine_balance(model, x, active_professionals, professionals,
         del parell linkat compta 1; el del NP doblat compta 1."""
         sid = str(sk[2]).strip().upper()
         pres = str(sk[3]).strip().upper()
-        partner = link_partner.get(sid)
-        if partner is None:
+        canon = link_canon.get(sid)
+        if canon is None:
             return (sk[0], sid, sk[4], sk[5], pres)
-        canon = min(sid, partner)
         return (sk[0], "__LINK__", canon, sk[4], sk[5], pres)
 
     groups: dict = {}

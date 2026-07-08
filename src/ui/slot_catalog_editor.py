@@ -105,7 +105,7 @@ def render_slot_catalog_editor(
         st.caption(
             "**Afegir o editar activitat**: omple les opcions i prem "
             "**Aplicar**. Si seleccionés una fila a la taula de sota, els camps "
-            "es prefumen amb els seus valors per editar-la. Si escrius un nom "
+            "s'omplen prèviament amb els seus valors per editar-la. Si escrius un nom "
             "nou s'afegeix una activitat nova. La vinculació entre màquines "
             "es configura a Estructura › Franges (per dia i franja)."
         )
@@ -173,7 +173,7 @@ def render_slot_catalog_editor(
                 _family_final = _qa_family_clean or _family_guess
                 # `linked_to` ja no s'edita des d'aquí: la vinculació
                 # s'introdueix per (dia, franja) a Estructura › Franges.
-                # Per a UPDATE preservarem el valor existent (sotto).
+                # Per a UPDATE preservarem el valor existent (a sota).
                 _linked_final = ""
 
                 # Determinar mode: si hi ha fila seleccionada → UPDATE; sino → ADD.

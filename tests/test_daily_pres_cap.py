@@ -58,7 +58,7 @@ class TestDailyPresCapBasic:
         x = _build_x(model, "P1", rows)
         _add_daily_compat_constraints(
             model, x, ["P1"], rows, ["2026-01-06"], review_slots=set(),
-            slot_links=[],
+            links_by_wf={},
         )
         # Forcem totes dues assignades
         for r in rows:
@@ -75,7 +75,7 @@ class TestDailyPresCapBasic:
         x = _build_x(model, "P1", rows)
         _add_daily_compat_constraints(
             model, x, ["P1"], rows, ["2026-01-06"], review_slots=set(),
-            slot_links=[],
+            links_by_wf={},
         )
         for r in rows:
             model.Add(x[("P1", _make_slot_key(r))] == 1)
@@ -95,7 +95,7 @@ class TestDailyPresCapLinkedException:
         x = _build_x(model, "P1", rows)
         _add_daily_compat_constraints(
             model, x, ["P1"], rows, ["2026-01-06"], review_slots=set(),
-            slot_links=[("RM_B", "RM_A")],
+            links_by_wf={("", ""): [("RM_B", "RM_A")]},
         )
         for r in rows:
             model.Add(x[("P1", _make_slot_key(r))] == 1)
@@ -113,7 +113,7 @@ class TestDailyPresCapLinkedException:
         x = _build_x(model, "P1", rows)
         _add_daily_compat_constraints(
             model, x, ["P1"], rows, ["2026-01-06"], review_slots=set(),
-            slot_links=[("RM_B", "RM_A")],
+            links_by_wf={("", ""): [("RM_B", "RM_A")]},
         )
         for r in rows:
             model.Add(x[("P1", _make_slot_key(r))] == 1)
@@ -133,7 +133,7 @@ class TestDailyPresCapNitException:
         x = _build_x(model, "P1", rows)
         _add_daily_compat_constraints(
             model, x, ["P1"], rows, ["2026-01-06"], review_slots=set(),
-            slot_links=[],
+            links_by_wf={},
         )
         for r in rows:
             model.Add(x[("P1", _make_slot_key(r))] == 1)
@@ -151,7 +151,7 @@ class TestDailyPresCapNitException:
         x = _build_x(model, "P1", rows)
         _add_daily_compat_constraints(
             model, x, ["P1"], rows, ["2026-01-06"], review_slots=set(),
-            slot_links=[],
+            links_by_wf={},
         )
         for r in rows:
             model.Add(x[("P1", _make_slot_key(r))] == 1)
@@ -169,7 +169,7 @@ class TestDailyPresCapNitException:
         x = _build_x(model, "P1", rows)
         _add_daily_compat_constraints(
             model, x, ["P1"], rows, ["2026-01-06"], review_slots=set(),
-            slot_links=[("RM_B", "RM_A")],
+            links_by_wf={("", ""): [("RM_B", "RM_A")]},
         )
         for r in rows:
             model.Add(x[("P1", _make_slot_key(r))] == 1)

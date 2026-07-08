@@ -131,7 +131,7 @@ def _notify_presencial_flips(container) -> None:
     )
 
 
-def _export_general_weekday_pdf(
+def export_general_weekday_pdf(
     weekday_schedule_path: Path,
     professionals_path: Path,
     pdf_output_dir: Path,
@@ -244,7 +244,7 @@ def run_weekday_regenerate(
         _notify_guard_absence_conflicts(container)
         _notify_presencial_flips(container)
         # Genera el PDF (subdir entre_setmana, l'únic que utilitzem).
-        _export_general_weekday_pdf(
+        export_general_weekday_pdf(
             weekday_schedule_path, professionals_path, pdf_output_dir,
             year, selected_months, container=container,
         )
@@ -529,7 +529,7 @@ def render_weekday_planning_tab(
             _notify_presencial_flips(gen_progress_box)
             # Genera el PDF perquè es vegi directament a l'app
             # (visualitzador de sota).
-            _export_general_weekday_pdf(
+            export_general_weekday_pdf(
                 weekday_schedule_path, professionals_path, pdf_output_dir,
                 year, selected_months, container=gen_progress_box,
             )

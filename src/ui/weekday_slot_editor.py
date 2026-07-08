@@ -306,16 +306,27 @@ def _render_selected_fixed_slot_editor(
                 else "PRESENCIAL"
             )
             if bool(edited_doubled_choice):
-                templates_df = add_work_slot_template(
-                    templates_df,
-                    edited_fixed_weekday,
-                    edited_fixed_franja,
-                    edited_fixed_slot,
-                    _opposite_pres,
-                    edited_fixed_work_mode,
-                    int(edited_fixed_required_staff),
-                    doubled=0,
+                # Només afegim la sibling si NO existeix: add_work_slot_template
+                # sobre una fila existent INCREMENTA required_staff (personal
+                # fantasma a cada «Guardar canvi»).
+                _sib_mask = (
+                    (templates_df["weekday_name"].astype(str) == str(edited_fixed_weekday))
+                    & (templates_df["franja"].astype(str) == str(edited_fixed_franja))
+                    & (templates_df["slot_id"].astype(str).str.strip().str.upper()
+                       == edited_fixed_slot)
+                    & (templates_df["presentiality"].astype(str) == _opposite_pres)
                 )
+                if not _sib_mask.any():
+                    templates_df = add_work_slot_template(
+                        templates_df,
+                        edited_fixed_weekday,
+                        edited_fixed_franja,
+                        edited_fixed_slot,
+                        _opposite_pres,
+                        edited_fixed_work_mode,
+                        int(edited_fixed_required_staff),
+                        doubled=0,
+                    )
             else:
                 templates_df = remove_work_slot_template(
                     templates_df,
@@ -325,18 +336,18 @@ def _render_selected_fixed_slot_editor(
                     _opposite_pres,
                     edited_fixed_work_mode,
                 )
-            # Persisteix la vinculació al template (per (dia, franja))
-            # si l'usuari l'ha modificada.
+            # Persisteix la vinculació al template (per (dia, franja)) SEMPRE
+            # — no només si ha canviat: el remove+add de dalt recrea la fila
+            # SENSE linked_to, així que sense aquesta re-escriptura el vincle
+            # es perdria en silenci a cada «Guardar canvi».
             _new_edit_link = str(edited_link_choice or "").strip().upper()
-            if _new_edit_link != _edit_link_current:
-                templates_df = _save_linked_to_in_template(
-                    templates_df,
-                    edited_fixed_weekday,
-                    edited_fixed_franja,
-                    edited_fixed_slot,
-                    _new_edit_link,
-                    weekly_templates_path,
-                )
+            templates_df = _save_linked_to_in_template(
+                templates_df,
+                edited_fixed_weekday,
+                edited_fixed_franja,
+                edited_fixed_slot,
+                _new_edit_link,
+            )
             save_weekly_slot_templates(templates_df, weekly_templates_path)
             invalidate_after_work_slot_change()
             st.session_state.pop("selected_fixed_work_slot_edit", None)
@@ -362,20 +373,11 @@ def _render_selected_fixed_slot_editor(
 
 
 def _secondary_slots() -> set[str]:
-    """Set d'slot_ids marcats com a "màquina secundària" al catàleg
-    (apareixen al camp `linked_to` d'alguna altra fila). Els slots
-    secundaris s'autodefaulteja a NO_PRESENCIAL al template."""
-    try:
-        cat = pd.read_csv(Path("data/slot_catalog.csv"))
-    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
-        return set()
-    if "linked_to" not in cat.columns:
-        return set()
-    return {
-        s.strip().upper()
-        for s in cat["linked_to"].fillna("").astype(str)
-        if s.strip()
-    }
+    """Slot_ids "màquina secundària" (font única:
+    slot_catalog.secondary_slot_ids_effective — templates primer, catàleg
+    com a fallback). S'autodefaulteja a NO_PRESENCIAL al template."""
+    from src.services.slot_catalog import secondary_slot_ids_effective
+    return secondary_slot_ids_effective()
 
 
 def _presential_slots_for(
@@ -615,7 +617,6 @@ def _render_selected_fixed_cell_editor(
                     selected_fixed_cell["franja"],
                     slot_to_add,
                     _new_link,
-                    weekly_templates_path,
                 )
             save_weekly_slot_templates(templates_df, weekly_templates_path)
             invalidate_after_work_slot_change()
@@ -657,11 +658,12 @@ def _save_linked_to_in_template(
     franja: str,
     slot_id: str,
     partner: str,
-    weekly_templates_path: Path,
 ) -> pd.DataFrame:
     """Actualitza el camp `linked_to` de la fila concreta del template
-    (per (weekday_name, franja, slot_id)). La vinculació passa a ser
-    LOCAL a la franja, no global al catàleg."""
+    (per (weekday_name, franja, slot_id)). La vinculació és LOCAL a la
+    franja, no global al catàleg. NOMÉS muta el DataFrame (còpia): la
+    persistència a disc és responsabilitat del caller — un únic punt de
+    save per handler evita dobles escriptures inconsistents."""
     df = templates_df.copy()
     if "linked_to" not in df.columns:
         df["linked_to"] = ""
@@ -676,7 +678,6 @@ def _save_linked_to_in_template(
     if not mask.any():
         return df
     df.loc[mask, "linked_to"] = new_val
-    save_weekly_slot_templates(df, weekly_templates_path)
     return df
 
 

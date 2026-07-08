@@ -31,20 +31,11 @@ from src.services.calendar_inputs import (
 
 
 def _fallback_professional_ids() -> set[str]:
-    """IDs (en majúscules) dels facultatius comodí (professionals.csv
-    fallback=1), p.ex. TLD. Es marquen en vermell al calendari perquè
-    ressaltin de cara als canvis manuals."""
-    pp = Path("data/professionals.csv")
-    if not pp.exists() or pp.stat().st_size == 0:
-        return set()
-    try:
-        pdf = pd.read_csv(pp)
-    except Exception:
-        return set()
-    if not {"professional_id", "fallback"}.issubset(pdf.columns):
-        return set()
-    fb = pd.to_numeric(pdf["fallback"], errors="coerce").fillna(0).astype(int)
-    return {str(p).strip().upper() for p in pdf.loc[fb == 1, "professional_id"]}
+    """IDs dels facultatius comodí (font única: professionals_info). Es
+    marquen en vermell al calendari perquè ressaltin de cara als canvis
+    manuals."""
+    from src.services.professionals_info import fallback_professional_ids
+    return fallback_professional_ids()
 
 
 def non_working_days_for_calendar(year: int, base_calendar_path: Path, public_holidays_path: Path) -> set[str]:

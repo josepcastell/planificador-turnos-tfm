@@ -82,7 +82,7 @@ def render_professionals_editor(
 
     st.caption(
         "Afegeix o edita facultatius. Si selecciones una fila a la taula, els "
-        "camps es prefumen amb els seus valors per editar-la. Si l'identificador "
+        "camps s'omplen prèviament amb els seus valors per editar-la. Si l'identificador "
         "(Facultatiu) és nou, s'afegeix una nova entrada."
     )
 

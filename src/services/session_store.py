@@ -180,7 +180,13 @@ def read_session_metadata(session_dir: Path) -> dict[str, str]:
     if not manifest.exists():
         return {}
     data = {}
-    for line in manifest.read_text(encoding="utf-8").splitlines():
+    try:
+        # errors="replace": un session.txt re-desat en ANSI amb accents no
+        # pot deixar l'app inarrencable al boot per un UnicodeDecodeError.
+        text = manifest.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    for line in text.splitlines():
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
@@ -191,8 +197,15 @@ def read_session_metadata(session_dir: Path) -> dict[str, str]:
 def read_last_session_name(last_session_path: Path, session_root: Path) -> str:
     if not last_session_path.exists():
         return ""
-    name = last_session_path.read_text(encoding="utf-8").strip()
+    try:
+        name = last_session_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
     if not name:
+        return ""
+    # Sense separadors de ruta: el nom ha de ser un FILL directe de
+    # session_root (mai `..` ni subrutes — cap escapada de l'arbre).
+    if any(sep in name for sep in ("/", "\\")) or name in {".", ".."}:
         return ""
     return name if (session_root / name).is_dir() else ""
 
@@ -435,7 +448,8 @@ def workspace_has_user_data(year: int) -> bool:
 
 def _session_live_items(session_dir: Path):
     for item in session_dir.iterdir():
-        if item.name == SNAPSHOTS_DIRNAME:
+        # ".restore_staging": residu possible d'una restauració interrompuda.
+        if item.name in {SNAPSHOTS_DIRNAME, ".restore_staging"}:
             continue
         yield item
 
@@ -449,13 +463,30 @@ def delete_session_folder(session_dir: Path) -> bool:
     return True
 
 
+MAX_SNAPSHOTS = 15
+
+
+def _prune_old_snapshots(snapshots_root: Path, keep: int = MAX_SNAPSHOTS) -> None:
+    """Rotació: conserva només les `keep` versions més recents. Sense
+    això les versions (que inclouen PDFs) creixen indefinidament al disc
+    del portable."""
+    snaps = sorted(
+        (p for p in snapshots_root.iterdir() if p.is_dir()),
+        key=lambda p: p.name,
+    )
+    for old in snaps[:-keep] if len(snaps) > keep else []:
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def create_session_snapshot(session_dir: Path) -> Path | None:
     """Còpia recursiva de session_dir dins session_dir/_snapshots/<ts>/.
-    Retorna la ruta de la versió, o None si session_dir no existeix."""
+    Retorna la ruta de la versió, o None si session_dir no existeix.
+    Conserva com a màxim MAX_SNAPSHOTS versions (les més recents)."""
     if not session_dir.exists():
         return None
     snapshots_root = session_dir / SNAPSHOTS_DIRNAME
     snapshots_root.mkdir(parents=True, exist_ok=True)
+    _prune_old_snapshots(snapshots_root, keep=MAX_SNAPSHOTS - 1)
     base = datetime.now().strftime("%Y%m%d_%H%M%S")
     snapshot_path = snapshots_root / base
     suffix = 1
@@ -491,20 +522,43 @@ def restore_session_snapshot(
     pdf_output_dir: Path,
 ) -> int:
     """Substitueix el contingut viu de session_dir (preservant _snapshots/)
-    pel de snapshot_dir, i refresca els fitxers de treball."""
+    pel de snapshot_dir, i refresca els fitxers de treball.
+
+    ATOMICITAT: primer es fa un snapshot automàtic de seguretat de l'estat
+    actual i es prepara TOTA la còpia en un directori d'staging; només
+    llavors s'esborra l'estat viu i es mou l'staging al seu lloc. Un tall
+    a mig procés mai deixa la sessió buida (com passaria amb el patró
+    esborra-primer-copia-després)."""
     if not snapshot_dir.exists() or not session_dir.exists():
         return 0
+    # Xarxa de seguretat: versió automàtica de l'estat que estem a punt
+    # de substituir (recuperable des del desplegable de versions).
+    create_session_snapshot(session_dir)
+    staging = session_dir / ".restore_staging"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    try:
+        for item in snapshot_dir.iterdir():
+            target = staging / item.name
+            if item.is_dir():
+                shutil.copytree(item, target)
+            else:
+                shutil.copy2(item, target)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    # L'staging està complet: ara sí, substituïm l'estat viu.
     for item in list(_session_live_items(session_dir)):
+        if item.name == staging.name:
+            continue
         if item.is_dir():
             shutil.rmtree(item)
         else:
             item.unlink()
-    for item in snapshot_dir.iterdir():
-        target = session_dir / item.name
-        if item.is_dir():
-            shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
+    for item in list(staging.iterdir()):
+        shutil.move(str(item), str(session_dir / item.name))
+    staging.rmdir()
     return load_session_folder(session_dir, year, month, pdf_output_dir)
 
 
