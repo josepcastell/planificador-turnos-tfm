@@ -304,26 +304,19 @@ def render_schedule_calendar_html(
             return '<div class="schedule-empty-note">Sense assignacions</div>'
         return "".join(parts)
 
-    import datetime as _dt
     cal = calendar.Calendar(firstweekday=0)
     week_blocks = []
     for week in cal.monthdatescalendar(year, month_num):
         visible_days = [day for day in week if day.weekday() in weekday_indices]
-        # Regla "setmana pertany al mes del seu dilluns": només incloem
-        # setmanes el dilluns de les quals és al month_num.
-        week_monday = week[0] if week else None
-        if (
-            week_monday is None
-            or week_monday.month != month_num
-            or week_monday.year != year
+        # Mes NATURAL: s'inclouen totes les setmanes que toquen el mes;
+        # els dies d'altres mesos dins d'aquestes setmanes queden buits.
+        if not any(
+            d.month == month_num and d.year == year for d in visible_days
         ):
             continue
         day_cards = []
         for current in visible_days:
-            # El dilluns ja s'ha verificat que és al mes — els altres
-            # dies de la setmana (potencialment de l'altre mes) s'inclouen.
-            current_monday = current - _dt.timedelta(days=current.weekday())
-            if current_monday.month != month_num or current_monday.year != year:
+            if current.month != month_num or current.year != year:
                 day_cards.append('<div class="schedule-day-card empty"></div>')
                 continue
             day_key = current.strftime("%Y-%m-%d")

@@ -608,6 +608,78 @@ def persist_slot_catalog_with_templates(
         save_table(weekend_templates_path, weekend_templates_df, _WEEKEND_TEMPLATE_FULL_COLS)
 
 
+def machine_series_slot_ids(catalog_df, family: str, area: str) -> list[str]:
+    """Ids del catàleg que formen la SÈRIE família+lloc per a la
+    numeració: files amb metric_family i area coincidents, més
+    (retrocompatibilitat) files SENSE família ni àrea informades el nom
+    de les quals encaixa amb el patró FAMILIA[N]_LLOC. Filtrar pels
+    CAMPS del catàleg (no pel nom) evita contaminar sèries quan una
+    família acaba en dígit (TC3 vs TC34)."""
+    import re
+
+    fam = str(family or "").strip().upper()
+    ar = str(area or "").strip().upper()
+    if catalog_df is None or getattr(catalog_df, "empty", True):
+        return []
+    sid = catalog_df.get("slot_id")
+    if sid is None:
+        return []
+    sid = sid.fillna("").astype(str).str.strip().str.upper()
+    famc = (
+        catalog_df.get("metric_family", pd.Series("", index=catalog_df.index))
+        .fillna("").astype(str).str.strip().str.upper()
+    )
+    arc = (
+        catalog_df.get("area", pd.Series("", index=catalog_df.index))
+        .fillna("").astype(str).str.strip().str.upper()
+    )
+    pat = re.compile(rf"^{re.escape(fam)}(\d*)_{re.escape(ar)}$")
+    out = []
+    for s, f, a in zip(sid, famc, arc):
+        if not s:
+            continue
+        if (f == fam and a == ar) or (not f and not a and pat.match(s)):
+            out.append(s)
+    return out
+
+
+def numbered_machine_slot_name(
+    existing_slot_ids, family: str, area: str,
+) -> tuple[str, tuple[str, str] | None]:
+    """Nom per a una activitat generada des de Màquina + Lloc, amb
+    NUMERACIÓ quan el mateix lloc ja té màquines del mateix tipus: la
+    primera és ECO_PURA; en afegir la segona, l'existent es renombra a
+    ECO1_PURA i la nova és ECO2_PURA (al calendari i al PDF es veuen com
+    ECO1 / ECO2 sota l'àrea). Retorna (nou_nom, rename) on rename és
+    (antic, nou) si cal renombrar l'existent sense número, o None."""
+    import re
+
+    fam = str(family or "").strip().upper()
+    ar = str(area or "").strip().upper()
+    existing = {
+        str(s).strip().upper()
+        for s in (existing_slot_ids or [])
+        if str(s).strip()
+    }
+    plain = f"{fam}_{ar}"
+    pat = re.compile(rf"^{re.escape(fam)}(\d+)_{re.escape(ar)}$")
+    numbered = {int(m.group(1)) for s in existing if (m := pat.match(s))}
+    has_plain = plain in existing
+    if not numbered and not has_plain:
+        return plain, None
+    rename = None
+    if has_plain:
+        # L'entrada sense número rep el PRIMER número lliure (normalment
+        # 1; si l'1 ja existeix — p.ex. per un estat mig numerat — el
+        # següent buit), així la sèrie sempre queda completa.
+        free = 1
+        while free in numbered:
+            free += 1
+        rename = (plain, f"{fam}{free}_{ar}")
+        numbered.add(free)
+    return f"{fam}{max(numbered) + 1}_{ar}", rename
+
+
 def sync_weekend_templates_with_catalog(
     catalog_df: pd.DataFrame,
     templates_df: pd.DataFrame,

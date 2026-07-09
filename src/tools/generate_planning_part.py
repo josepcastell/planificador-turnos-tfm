@@ -26,18 +26,17 @@ def _filter_out_generated_months(
     date_col: str = "day",
 ) -> pd.DataFrame:
     """Treu les files generades al scope. El scope segueix la mateixa
-    regla que `filter_module_to_month`: una setmana ISO pertany al mes
-    del seu DILLUNS. Així una setmana que travessa el límit només es
-    regenera quan es regenera el mes del seu dilluns."""
+    regla que `filter_module_to_month`: el MES NATURAL (de l'1 a
+    l'últim dia del mes). Regenerar un mes esborra i torna a generar
+    exactament els seus dies de calendari."""
     if df.empty or date_col not in df.columns:
         return pd.DataFrame(columns=df.columns)
     out = df.copy()
     dates = pd.to_datetime(out[date_col], errors="coerce")
-    monday_of_week = dates - pd.to_timedelta(dates.dt.weekday, unit="D")
     generated_scope = (
-        (monday_of_week.dt.year == year)
-        & (monday_of_week.dt.month >= start_month)
-        & (monday_of_week.dt.month <= end_month)
+        (dates.dt.year == year)
+        & (dates.dt.month >= start_month)
+        & (dates.dt.month <= end_month)
     )
     return out.loc[~generated_scope.fillna(False)].copy()
 

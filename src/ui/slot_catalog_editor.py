@@ -186,6 +186,22 @@ def render_slot_catalog_editor(
                 if _selected_slot and (existing_slots_upper == _selected_slot).any():
                     # UPDATE de la fila seleccionada. Si el nom canvia i xoca
                     # amb un altre slot existent, autosufixar.
+                    if (
+                        not _qa_name_clean
+                        and _qa_family_clean and _qa_area_clean
+                        and new_name != _selected_slot
+                    ):
+                        import re as _re
+                        if _re.match(
+                            rf"^{_re.escape(_qa_family_clean)}\d+_"
+                            rf"{_re.escape(_qa_area_clean)}$",
+                            _selected_slot,
+                        ):
+                            # La fila ja és un membre NUMERAT de la sèrie:
+                            # buidar el camp Nom no l'ha de regressar al nom
+                            # pla (deixaria la sèrie coixa) — conservem el
+                            # nom actual i només s'actualitzen els camps.
+                            new_name = _selected_slot
                     if new_name != _selected_slot:
                         _other_slots = set(
                             existing_slots_upper[
@@ -223,15 +239,16 @@ def render_slot_catalog_editor(
                         existing = cascade_rename_linked_to(
                             existing, _selected_slot, new_name,
                         )
-                        # 2) templates setmanals (a disc).
-                        if (
-                            weekday_templates_path is not None
-                            and weekday_templates_path.exists()
+                        # 2) templates setmanals i de cap de setmana (a
+                        #    disc — el persist poda slots fora de catàleg,
+                        #    així que cal renombrar-los ABANS).
+                        for _tpl_path in (
+                            weekday_templates_path, weekend_templates_path,
                         ):
-                            cascade_rename_slot_id_in_file(
-                                weekday_templates_path,
-                                _selected_slot, new_name,
-                            )
+                            if _tpl_path is not None and _tpl_path.exists():
+                                cascade_rename_slot_id_in_file(
+                                    _tpl_path, _selected_slot, new_name,
+                                )
                         # 3) eligibility, preassignments,
                         #    template_overrides (any del scope).
                         if year is not None:
@@ -255,7 +272,66 @@ def render_slot_catalog_editor(
                 else:
                     # ADD: si col·lisiona el nom, autosufixar.
                     existing_set = set(existing_slots_upper)
-                    if new_name in existing_set:
+                    _auto_generated = bool(
+                        not _qa_name_clean and _qa_family_clean and _qa_area_clean
+                    )
+                    if _auto_generated:
+                        # Màquina REPETIDA al mateix lloc → numeració
+                        # (ECO1, ECO2, RM1...): l'existent sense número es
+                        # renombra al primer número lliure (amb cascade) i
+                        # la nova rep el número següent. La SÈRIE es
+                        # determina pels camps del catàleg (família+lloc),
+                        # no pel nom — així una família que acaba en dígit
+                        # (TC3 vs TC34) no contamina la sèrie de l'altra.
+                        from src.services.slot_catalog import (
+                            machine_series_slot_ids,
+                            numbered_machine_slot_name,
+                        )
+                        from src.services.slot_rename import (
+                            cascade_rename_linked_to,
+                            cascade_rename_slot_id,
+                            cascade_rename_slot_id_in_file,
+                        )
+                        _series = machine_series_slot_ids(
+                            existing, _qa_family_clean, _qa_area_clean,
+                        )
+                        new_name, _rename = numbered_machine_slot_name(
+                            _series, _qa_family_clean, _qa_area_clean,
+                        )
+                        if _rename is not None:
+                            _old_id, _new_id = _rename
+                            _rmask = existing_slots_upper == _old_id
+                            existing.loc[_rmask, "slot_id"] = _new_id
+                            existing = cascade_rename_linked_to(
+                                existing, _old_id, _new_id,
+                            )
+                            # Els templates s'han de renombrar ABANS del
+                            # persist (la sincronització poda les files de
+                            # slots que no són al catàleg).
+                            for _tpl_path in (
+                                weekday_templates_path,
+                                weekend_templates_path,
+                            ):
+                                if _tpl_path is not None and _tpl_path.exists():
+                                    cascade_rename_slot_id_in_file(
+                                        _tpl_path, _old_id, _new_id,
+                                    )
+                            if year is not None:
+                                cascade_rename_slot_id(_old_id, _new_id, year)
+                            st.session_state["slot_catalog_draft"] = existing
+                            st.toast(
+                                f"«{_old_id}» → «{_new_id}» (numeració de "
+                                "màquines repetides)",
+                                icon="🔢",
+                            )
+                        if new_name in existing_set:
+                            # Col·lisió FORA de la sèrie (un nom manual
+                            # d'una altra família): autosufix clàssic.
+                            _n = 2
+                            while f"{new_name}_{_n}" in existing_set:
+                                _n += 1
+                            new_name = f"{new_name}_{_n}"
+                    elif new_name in existing_set:
                         _n = 2
                         while f"{new_name}_{_n}" in existing_set:
                             _n += 1

@@ -441,7 +441,8 @@ def _write_calendari_grid(
     post_idx = _post_guard_days(year) if year else {}
     festiu_days = _non_working_days(year) if year else set()
 
-    # Determinar les setmanes del scope (només dilluns dins el mes lògic).
+    # Determinar les setmanes del scope (mes natural: es deriven dels
+    # dilluns de les dades presents; els dies fora de mes queden buits).
     df = schedule_df.copy()
     df["day"] = df["day"].astype(str)
     df["_day_dt"] = pd.to_datetime(df["day"], errors="coerce")

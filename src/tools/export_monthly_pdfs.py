@@ -496,15 +496,11 @@ def build_weekday_grid_calendar_pdf(
     weekday_names = ["Dilluns", "Dimarts", "Dimecres", "Dijous", "Divendres"]
     franges = [("MATI", "Matí"), ("TARDA", "Tarda"), ("NIT", "Nit")]
 
-    # Regla del dilluns: una setmana ISO pertany al mes del seu dilluns.
-    # Per tant, una setmana al final del mes pot incloure dies del mes
-    # següent (i una setmana al començament pot incloure dies del mes
-    # anterior). Aquests dies "lògicament del mes" s'han de pintar igual.
-    import datetime as _dtmod
-
+    # Mes NATURAL: el dia pertany al mes si hi cau per data (de l'1 a
+    # l'últim dia). Els dies de la mateixa setmana que són d'un altre
+    # mes queden com a bloc buit/gris.
     def _in_logical(d) -> bool:
-        mon = d - _dtmod.timedelta(days=d.weekday())
-        return mon.year == year and mon.month == month
+        return d.year == year and d.month == month
 
     assignment_map = defaultdict(list)
     slots_by_day: dict = defaultdict(set)
@@ -569,10 +565,8 @@ def build_weekday_grid_calendar_pdf(
         if any(d.month == month and d.year == year for d in mon_fri):
             bands.append(mon_fri)
 
-    # Compatibilitat: a la resta de la funció es feia servir _in_month
-    # per decidir si un dia és "del mes". Ara aplicarem la regla del
-    # dilluns (setmanes completes) per coherència amb la resta del
-    # programa: el dia s'inclou si la seva setmana pertany al mes lògic.
+    # Compatibilitat: a la resta de la funció es fa servir _in_month per
+    # decidir si un dia és "del mes" — mes natural, com _in_logical.
     def _in_month(d) -> bool:
         return _in_logical(d)
 
@@ -606,9 +600,8 @@ def build_weekday_grid_calendar_pdf(
 
     # Guàrdies / postguàrdies del mes (per data). La guàrdia surt a la
     # capçalera del dia; la postguàrdia, a la fila d'absències (PG).
-    # També apliquem la regla del dilluns: si la setmana del dia pertany
-    # al mes lògic, la guàrdia/postguàrdia es renderitza al PDF d'aquest
-    # mes encara que el dia sigui de juny/juliol per data.
+    # Mateix criteri de mes natural que la resta del PDF: només es
+    # renderitzen les dels dies que cauen dins del mes per data.
     guards_by_date: dict = {}
     post_by_date: dict = {}
     if show_operational_overlays:
@@ -918,13 +911,10 @@ def build_general_calendar_pdf(
     title_style.fontSize = 13
     title_style.leading = 15
 
-    import datetime as _dtmod_g
-
     def _in_logical_g(d) -> bool:
-        # Regla del dilluns: el dia s'inclou si la seva setmana pertany
-        # al mes lògic (la setmana ISO pertany al mes del seu dilluns).
-        mon = d - _dtmod_g.timedelta(days=d.weekday())
-        return mon.year == year and mon.month == month
+        # Mes NATURAL: el dia s'inclou si hi cau per data (de l'1 a
+        # l'últim dia del mes).
+        return d.year == year and d.month == month
 
     first_day = pd.Timestamp(year=year, month=month, day=1)
     last_day = first_day + pd.offsets.MonthEnd(0)
@@ -933,10 +923,11 @@ def build_general_calendar_pdf(
     calendar_days = pd.date_range(calendar_start, calendar_end, freq="D")
 
     all_weeks = [calendar_days[i:i + 7] for i in range(0, len(calendar_days), 7)]
-    # Només les setmanes el dilluns de les quals és al mes lògic.
+    # Totes les setmanes que toquen el mes natural (els dies d'altres
+    # mesos dins d'aquestes setmanes queden buits).
     weeks = [
         wk for wk in all_weeks
-        if len(wk) > 0 and _in_logical_g(wk[0].date())
+        if any(_in_logical_g(d.date()) for d in wk)
     ]
     weekday_headers = ["Dilluns", "Dimarts", "Dimecres", "Dijous", "Divendres", "Dissabte", "Diumenge"]
     visible_weekday_indices = list(range(5)) if weekdays_only else list(range(7))
@@ -1048,13 +1039,10 @@ def build_individual_calendar_pdfs(
         shutil.rmtree(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    import datetime as _dtmod_i
-
     def _in_logical_i(d) -> bool:
-        # Regla del dilluns aplicada al PDF individual (coherent amb la
-        # resta del programa). Vegeu nota a build_general_calendar_pdf.
-        mon = d - _dtmod_i.timedelta(days=d.weekday())
-        return mon.year == year and mon.month == month
+        # Mes NATURAL aplicat al PDF individual (coherent amb la resta
+        # del programa). Vegeu nota a build_general_calendar_pdf.
+        return d.year == year and d.month == month
 
     first_day = pd.Timestamp(year=year, month=month, day=1)
     last_day = first_day + pd.offsets.MonthEnd(0)
@@ -1065,7 +1053,7 @@ def build_individual_calendar_pdfs(
     all_weeks = [calendar_days[i:i+7] for i in range(0, len(calendar_days), 7)]
     weeks = [
         wk for wk in all_weeks
-        if len(wk) > 0 and _in_logical_i(wk[0].date())
+        if any(_in_logical_i(d.date()) for d in wk)
     ]
     weekday_headers = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     visible_weekday_indices = list(range(5)) if weekdays_only else list(range(7))

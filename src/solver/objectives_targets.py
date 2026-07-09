@@ -513,11 +513,12 @@ def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, uniq
     for d in unique_days:
         days_by_week.setdefault(week_map[d], []).append(d)
 
-    # NOTA: ja no cal saltar partial weeks al límit del mes. La filtració
-    # `filter_module_to_month` ara segueix la regla "una setmana pertany
-    # al mes del seu DILLUNS", per la qual cada setmana ISO viu sencera
-    # en un solve i no es trenca. Així el target setmanal s'aplica
-    # sempre a setmanes completes (5 dies Mon-Fri).
+    # NOTA: amb el MES NATURAL (1..últim dia), les setmanes al límit del
+    # mes poden ser PARCIALS (p.ex. un setembre que comença en dimarts).
+    # No cal saltar-les: els targets es dimensionen als dies presents —
+    # els modes automàtics reparteixen la càrrega REAL dels dies del
+    # fragment, i el mode personalitzat escala per dies efectius
+    # (key = min(eff_days, 5)).
     for p in quota_hard_professionals:
         for yw in unique_weeks:
             week_days = days_by_week.get(yw, [])

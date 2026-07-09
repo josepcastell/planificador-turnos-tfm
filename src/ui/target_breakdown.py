@@ -123,9 +123,10 @@ def render_target_breakdown_per_prof(
         target_pres_5, target_mach_5 = 3, 4
     target_np_5 = max(0, target_mach_5 - target_pres_5)
 
-    # Nombre de setmanes lògiques al scope: dies / 5 (aproximat).
+    # Nombre de setmanes al scope: dies / 5 (aproximat; round() i no //
+    # perque amb el mes natural les setmanes frontereres son parcials).
     n_days = machine["day_dt"].dt.normalize().nunique()
-    n_weeks = max(1, n_days // 5) if n_days > 0 else 1
+    n_weeks = max(1, round(n_days / 5)) if n_days > 0 else 1
 
     label = f"calendari {which}" if which else "calendari"
     st.markdown(f"**Comptadors per facultatiu — {label}**")

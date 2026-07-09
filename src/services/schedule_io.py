@@ -18,9 +18,9 @@ import pandas as pd
 
 
 def filter_module_to_month(module_data: dict, year: int, month: int) -> dict:
-    """Filtra a "totes les setmanes ISO que pertanyen al mes" (regla:
-    una setmana pertany al mes del seu DILLUNS). Així una setmana que
-    travessa el límit del mes queda assignada a un sol dels mesos."""
+    """Filtra al MES NATURAL (de l'1 a l'ultim dia del mes). Les
+    setmanes que travessen el limit del mes queden partides entre els
+    dos solves; els targets setmanals es dimensionen als dies presents."""
     from src.domain.month_scope import in_logical_month
     out = {}
     for key, value in module_data.items():

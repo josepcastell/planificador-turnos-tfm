@@ -9,6 +9,8 @@ Fitxers actualitzats:
   - data/eligibility.csv (columna slot_id)
   - data/weekday/preassignments.csv (columna slot_id)
   - data/weekday/template_overrides_{year}.csv (columna slot_id)
+  - data/weekday/fixed_machines.csv (columna slot_id)
+  - data/weekday/wheel_slots.csv (columna slot_id)
   - data/weekday/weekly_slot_templates.csv (columna slot_id)  ← JA ES FA A L'EDITOR
 
 Limitacions conegudes:
@@ -90,7 +92,17 @@ def cascade_rename_slot_id(old_name: str, new_name: str, year: int) -> int:
         Path("data/eligibility.csv"),
         Path("data/weekday/preassignments.csv"),
         Path(f"data/weekday/template_overrides_{year}.csv"),
+        # Màquines fixes i roda d'assignació: també referencien slot_id —
+        # sense això, un canvi de nom hi deixaria referències mortes.
+        Path("data/weekday/fixed_machines.csv"),
+        Path("data/weekday/wheel_slots.csv"),
     ]
     for path in files:
         total += cascade_rename_slot_id_in_file(path, old_name, new_name)
+    # L'activitat de les regles d'equilibri (mode «activitat») també és
+    # un slot_id: si es renombra, l'equilibri deixaria de casar.
+    total += cascade_rename_slot_id_in_file(
+        Path("data/planning_rules.csv"), old_name, new_name,
+        column="balance_activity",
+    )
     return total

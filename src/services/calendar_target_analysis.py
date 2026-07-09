@@ -53,7 +53,7 @@ def compute_calendar_vs_targets(
     except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
         return out
 
-    # Filtra slots per any+mesos (regla: setmana ISO pertany al mes del dilluns).
+    # Filtra slots per any+mesos (mes natural: de l'1 a l'ultim dia).
     from src.domain.month_scope import in_logical_months
     if "day" not in slots.columns:
         return out
@@ -98,8 +98,10 @@ def compute_calendar_vs_targets(
         n_regulars = 0
 
     # Nre. de setmanes al scope (aproximat: dies / 5 dies laborables/setm).
+    # round() i no //: amb el mes natural les setmanes frontereres son
+    # parcials (21-23 dies laborables) i el floor descartava fins a 3 dies.
     n_days = scope["day_dt"].dt.normalize().nunique()
-    n_weeks = max(1, n_days // 5) if n_days > 0 else 0
+    n_weeks = max(1, round(n_days / 5)) if n_days > 0 else 0
 
     out["target_pres"] = n_regulars * target_pres_5 * n_weeks
     out["target_np_ord"] = n_regulars * target_np_5 * n_weeks

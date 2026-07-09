@@ -387,10 +387,10 @@ class TestMonthlyModes:
         assert PlanningRules.from_csv(p).mode == "mensual_presencial"
         PlanningRules(mode="mensual_total").to_csv(p)
         assert PlanningRules.from_csv(p).mode == "mensual_total"
-        PlanningRules(mode="activitat", balance_activity="ECO_PURA").to_csv(p)
+        PlanningRules(mode="activitat", balance_activity="ECO_ZONA_A").to_csv(p)
         loaded = PlanningRules.from_csv(p)
         assert loaded.mode == "activitat"
-        assert loaded.balance_activity == "ECO_PURA"
+        assert loaded.balance_activity == "ECO_ZONA_A"
         # CSV antic sense columna → activitat buida.
         pd.DataFrame({
             "active_days": [5], "target_machines": [4],
