@@ -18,30 +18,48 @@ def render_wheel_editor(existing_slots: list[str], professional_options: list[st
     )
     wheel = load_wheel()
 
+    _DAY_LABELS = {
+        "": "Tots els dies", "MONDAY": "Dilluns", "TUESDAY": "Dimarts",
+        "WEDNESDAY": "Dimecres", "THURSDAY": "Dijous", "FRIDAY": "Divendres",
+    }
     if not wheel.empty:
         for i, row in enumerate(wheel.itertuples(index=False)):
             col_txt, col_del = st.columns([5, 1])
             participants = str(row.professionals or "").strip() or "tots els facultatius"
-            col_txt.markdown(f"🎡 **{row.slot_id}** — ordre: {participants}")
+            _wd = str(getattr(row, "weekday_name", "") or "").strip().upper()
+            _dia = _DAY_LABELS.get(_wd, _wd)
+            col_txt.markdown(f"🎡 **{row.slot_id}** · {_dia} — ordre: {participants}")
             if col_del.button("Treure", key=f"wheel_rm_{i}", width="stretch"):
-                save_wheel(wheel[wheel["slot_id"] != row.slot_id])
-                st.toast(f"«{row.slot_id}» fora de la roda", icon="🗑️")
+                save_wheel(wheel[
+                    ~((wheel["slot_id"] == row.slot_id)
+                      & (wheel["weekday_name"] == _wd))
+                ])
+                st.toast(f"«{row.slot_id}» ({_dia}) fora de la roda", icon="🗑️")
                 st.rerun()
     else:
         st.caption("Cap activitat a la roda encara.")
 
     _slots = sorted(
         {str(s).strip().upper() for s in (existing_slots or []) if str(s).strip()}
-        - set(wheel["slot_id"])
     )
     _profs = sorted(
         p for p in (professional_options or [])
         if str(p).strip().upper() not in {"", "NONE", "NAN"}
     )
-    col_slot, col_profs = st.columns([1.2, 2])
+    col_slot, col_day, col_profs = st.columns([1.2, 0.9, 2])
     with col_slot:
         new_slot = st.selectbox(
             "Activitat", [""] + _slots, key="wheel_new_slot",
+        )
+    with col_day:
+        new_day = st.selectbox(
+            "Dia",
+            options=list(_DAY_LABELS),
+            format_func=lambda v: _DAY_LABELS[v],
+            key="wheel_new_day",
+            help="«Tots els dies» = una sola roda per a totes les "
+                 "ocurrències. Un dia concret = roda pròpia (amb la seva "
+                 "llista) només aquell dia; preval sobre la de «tots».",
         )
     with col_profs:
         new_profs = st.multiselect(
@@ -51,6 +69,13 @@ def render_wheel_editor(existing_slots: list[str], professional_options: list[st
             help="L'ordre de selecció és l'ordre del torn. Si ho deixes "
                  "buit, hi roten tots els facultatius (ordre alfabètic).",
         )
+    _dup = (
+        not wheel.empty
+        and ((wheel["slot_id"] == str(new_slot).strip().upper())
+             & (wheel["weekday_name"] == new_day)).any()
+    )
+    if _dup:
+        st.warning("Aquesta activitat ja té roda per a aquest dia (es substituirà).")
     if st.button(
         "Afegir a la roda",
         type="primary",
@@ -61,6 +86,7 @@ def render_wheel_editor(existing_slots: list[str], professional_options: list[st
             wheel,
             pd.DataFrame([{
                 "slot_id": str(new_slot).strip().upper(),
+                "weekday_name": new_day,
                 "professionals": ";".join(new_profs),
             }]),
         ], ignore_index=True)

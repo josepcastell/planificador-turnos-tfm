@@ -301,9 +301,23 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
     # existents (usuari / màquines fixes) prevalen: si ja hi ha una fila
     # per (dia, slot), la roda no hi opina.
     from src.services.wheel_assignments import expand_wheel_preassignments
+    # A més d'absències, el torn SALTA qui ja està ocupat per una màquina
+    # FIXA aquell dia/franja (si no, la preferència naixeria impossible i
+    # el torn es perdria aleatòriament en lloc de passar al següent).
+    _wheel_blocked = set(_franja_blocked or set())
+    if not preassignments.empty:
+        for _pr in preassignments.itertuples(index=False):
+            _pfr = str(getattr(_pr, "franja", "") or "").strip().upper()
+            _pid = str(_pr.professional_id).strip().upper()
+            _pday = str(_pr.day)
+            if _pfr:
+                _wheel_blocked.add((_pid, _pday, _pfr))
+            else:
+                _wheel_blocked.add((_pid, _pday, "MATI"))
+                _wheel_blocked.add((_pid, _pday, "TARDA"))
     wheel_rows = expand_wheel_preassignments(
         calendar_for_solver, common["professionals"],
-        _full_blocked, _franja_blocked,
+        _full_blocked, _wheel_blocked,
     )
     if not wheel_rows.empty and not preassignments.empty:
         _taken = {

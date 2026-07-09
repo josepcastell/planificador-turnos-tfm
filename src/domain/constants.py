@@ -128,7 +128,7 @@ SOLVER_WEIGHTS = {
     "weekly_shortfall": 500_000,
     # Roda d'assignació (TOVA): trencar un torn de la roda costa car però
     # mai fa el model infactible (cobertura i absències prevalen).
-    "wheel_preference": 900_000,
+    "wheel_preference": 5_000_000,
     # 5 — TLD comodí: pes ALT (20× el valor inicial 5k) perquè el solver
     #     minimitzi agresivament l'ús de TLD al tier 4, després que el
     #     tier 2 hagi assolit el target NP (peonades emergeixen com a

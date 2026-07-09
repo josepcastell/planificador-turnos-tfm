@@ -19,22 +19,33 @@ import pandas as pd
 from src.services.table_io import read_table, save_table
 
 WHEEL_PATH = Path("data/weekday/wheel_slots.csv")
-WHEEL_COLUMNS = ["slot_id", "professionals"]
+# weekday_name buit = tots els dies; amb valor (MONDAY..FRIDAY), la roda
+# només gira aquell dia de la setmana (amb la seva pròpia llista i torn).
+# Una fila específica de dia PREVAL sobre la fila genèrica del mateix slot.
+WHEEL_COLUMNS = ["slot_id", "weekday_name", "professionals"]
 
 
 def load_wheel(path: Path = WHEEL_PATH) -> pd.DataFrame:
     df = read_table(Path(path), WHEEL_COLUMNS)
     df["slot_id"] = df["slot_id"].fillna("").astype(str).str.strip().str.upper()
+    df["weekday_name"] = df["weekday_name"].fillna("").astype(str).str.strip().str.upper()
     df["professionals"] = df["professionals"].fillna("").astype(str).str.strip()
-    return df[df["slot_id"] != ""].drop_duplicates(subset=["slot_id"], keep="last")
+    return df[df["slot_id"] != ""].drop_duplicates(
+        subset=["slot_id", "weekday_name"], keep="last"
+    )
 
 
 def save_wheel(df: pd.DataFrame, path: Path = WHEEL_PATH) -> None:
     out = df.copy()
     out["slot_id"] = out["slot_id"].fillna("").astype(str).str.strip().str.upper()
+    if "weekday_name" not in out.columns:
+        out["weekday_name"] = ""
+    out["weekday_name"] = out["weekday_name"].fillna("").astype(str).str.strip().str.upper()
     out["professionals"] = out["professionals"].fillna("").astype(str).str.strip()
-    out = out[out["slot_id"] != ""].drop_duplicates(subset=["slot_id"], keep="last")
-    save_table(Path(path), out.sort_values("slot_id"), WHEEL_COLUMNS)
+    out = out[out["slot_id"] != ""].drop_duplicates(
+        subset=["slot_id", "weekday_name"], keep="last"
+    )
+    save_table(Path(path), out.sort_values(["slot_id", "weekday_name"]), WHEEL_COLUMNS)
 
 
 def _regular_professionals(professionals_df: pd.DataFrame) -> list[str]:
@@ -88,9 +99,25 @@ def expand_wheel_preassignments(
 
     valid = set(_regular_professionals(professionals_df))
     default_order = _regular_professionals(professionals_df)
+    # Dies amb fila ESPECÍFICA per slot (la genèrica els ha de saltar).
+    _specific_days: dict[str, set[str]] = {}
+    for w in wheel.itertuples(index=False):
+        wd = str(getattr(w, "weekday_name", "") or "").strip().upper()
+        if wd:
+            _specific_days.setdefault(w.slot_id, set()).add(wd)
+
+    from src.domain.constants import WEEKDAY_CODES
+
+    def _wd_of(day: str) -> str:
+        try:
+            return WEEKDAY_CODES[pd.Timestamp(day).weekday()]
+        except (ValueError, TypeError):
+            return ""
+
     rows: list[dict] = []
     for w in wheel.itertuples(index=False):
         sid = w.slot_id
+        w_wd = str(getattr(w, "weekday_name", "") or "").strip().upper()
         order = [
             p.strip().upper() for p in str(w.professionals or "").split(";")
             if p.strip() and p.strip().upper() in valid
@@ -100,6 +127,15 @@ def expand_wheel_preassignments(
         if not order:
             continue
         occ_days = sorted(ycal.loc[ycal["_slot"] == sid, "_day"].unique())
+        if w_wd:
+            # Roda d'un dia concret: torn propi sobre les ocurrències
+            # d'AQUELL dia de la setmana.
+            occ_days = [d for d in occ_days if _wd_of(d) == w_wd]
+        else:
+            # Roda genèrica: salta els dies coberts per una fila específica.
+            _spec = _specific_days.get(sid, set())
+            if _spec:
+                occ_days = [d for d in occ_days if _wd_of(d) not in _spec]
         for idx, day in enumerate(occ_days):
             if day not in month_days:
                 continue

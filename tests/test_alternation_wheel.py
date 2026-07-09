@@ -144,3 +144,27 @@ class TestUiRoundtripPreservesAlternation:
         back = read_table(p, WEEKDAY_TEMPLATE_COLUMNS)
         assert int(back.iloc[0]["week_interval"]) == 2
         assert int(back.iloc[0]["week_offset"]) == 1
+
+
+class TestWheelPerWeekday:
+    def test_specific_day_pool_overrides_generic(self, tmp_path, monkeypatch):
+        """Roda per dia: dijous gira AV;LP; la resta de dies la generica."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "data" / "weekday").mkdir(parents=True)
+        cal = pd.DataFrame([
+            {"day": d, "franja": "MATI", "slot_id": "MX",
+             "presentiality": "PRESENCIAL", "work_mode": "NORMAL"}
+            for d in ["2026-01-07", "2026-01-08", "2026-01-14", "2026-01-15"]
+        ])  # dimecres 7 i 14, dijous 8 i 15
+        cal.to_csv("data/weekday/calendar_slots.csv", index=False)
+        save_wheel(pd.DataFrame([
+            {"slot_id": "MX", "weekday_name": "", "professionals": "P1;P2"},
+            {"slot_id": "MX", "weekday_name": "THURSDAY", "professionals": "P3"},
+        ]))
+        profs = pd.DataFrame({"professional_id": ["P1", "P2", "P3"],
+                              "fallback": [0, 0, 0]})
+        rows = expand_wheel_preassignments(cal, profs)
+        got = {r["day"]: r["professional_id"] for _, r in rows.iterrows()}
+        # Dijous: sempre la roda especifica (P3). Dimecres: generica P1,P2.
+        assert got["2026-01-08"] == "P3" and got["2026-01-15"] == "P3"
+        assert got["2026-01-07"] == "P1" and got["2026-01-14"] == "P2"

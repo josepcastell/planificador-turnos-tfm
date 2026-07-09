@@ -35,3 +35,4 @@ Sessions_planificador/
 _backup_pre_clean/
 tmp/
 _audit_scan.py
+_t_*
