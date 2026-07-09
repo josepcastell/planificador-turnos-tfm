@@ -594,6 +594,18 @@ public_holidays_path = Path(f"data/derived/public_holidays_{year}.csv")
 base_calendar_overrides_path = Path(f"data/base_calendar_overrides_{year}.csv")
 sidebar_actions = render_session_sidebar_actions(session_dir)
 
+if sidebar_actions.save_version_clicked:
+    # Primer sincronitzem el treball ACTUAL del workspace a la carpeta de
+    # sessió: sense això, la versió fotografiaria l'estat de l'últim
+    # «Generar», no el d'ara mateix.
+    save_session_folder(session_dir, year, month)
+    _snapshot_path = session_store.create_session_snapshot(session_dir)
+    if _snapshot_path is not None:
+        st.toast(f"Versió {_snapshot_path.name} desada", icon="✅")
+    else:
+        st.toast("No s'ha pogut desar la versió.", icon="⚠️")
+    st.rerun()
+
 if sidebar_actions.restore_clicked and sidebar_actions.selected_snapshot is not None:
     restored = session_store.restore_session_snapshot(
         sidebar_actions.selected_snapshot, session_dir, year, month, PDF_OUTPUT_DIR,
@@ -724,33 +736,8 @@ def save_current_pending_input_drafts(scope_key: str, selected_year: int) -> Non
 
 st.header(section_name or "Planificador de torns")
 
-# Botó "Desar versió" a la dreta de la capçalera. Tots els canvis s'autodesen
-# al disc, però aquest botó crea una versió etiquetada al directori
-# `_snapshots/` que pots restaurar més tard des de la barra lateral.
-_save_col = st.columns([5, 1])[1]
-with _save_col:
-    if st.button(
-        "Desar versió",
-        width="stretch",
-        key="main_save_version_button",
-        help="Crea una còpia datada de la sessió actual a `_snapshots/`. "
-             "Es pot restaurar des de la barra lateral.",
-    ):
-        # Primer sincronitzem el treball ACTUAL del workspace a la carpeta
-        # de sessió: sense això, la versió fotografiaria l'estat de l'últim
-        # «Generar», no el d'ara mateix.
-        save_session_folder(session_dir, year, month)
-        _snapshot_path = session_store.create_session_snapshot(session_dir)
-        if _snapshot_path is not None:
-            st.toast(
-                f"Versió {_snapshot_path.name} desada",
-                icon="✅",
-            )
-        else:
-            st.toast(
-                "No s'ha pogut desar la versió (la sessió no existeix encara).",
-                icon="⚠️",
-            )
+# «Desar versió» viu ara al desplegable «🕘 Versions de la sessió» del
+# sidebar (sidebar_actions.save_version_clicked, gestionat més amunt).
 
 # L'àmbit del calendari (desplegable). Aquests valors s'usen a tot arreu.
 with st.expander("Àmbit del calendari", expanded=False):

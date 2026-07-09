@@ -304,6 +304,14 @@ def _render_balance_proposal_panel(
     canvis exactes i l'usuari decideix si s'apliquen o no."""
     from src.services import balance_proposal as bp
 
+    # Mode «No equilibrar»: mai propostes — si en queda una d'antiga (p. ex.
+    # generada abans de canviar el mode), s'esborra en silenci.
+    from src.domain.planning_rules import PlanningRules
+    if PlanningRules.from_csv(Path("data/planning_rules.csv")).mode == "none":
+        if bp.proposal_exists():
+            bp.discard_proposal()
+        return
+
     if not bp.proposal_exists():
         return
     diff = bp.load_proposal_diff()
