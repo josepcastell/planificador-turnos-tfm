@@ -21,16 +21,29 @@ import pandas as pd
 _DEFAULT_TARGET_MACHINES = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 _DEFAULT_TARGET_PRESENTIAL = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 
-_CSV_COLUMNS = ["active_days", "target_machines", "target_presential", "mode"]
+_CSV_COLUMNS = [
+    "active_days", "target_machines", "target_presential", "mode",
+    "balance_activity",
+]
 
-# Modes d'equilibri setmanal:
-#   personalitzat — la taula manual per mida de setmana (comportament clàssic).
-#   presencial    — target setmanal AUTOMÀTIC: la càrrega PRESENCIAL real de
-#                   cada setmana es reparteix proporcionalment a la jornada.
-#   total         — target setmanal AUTOMÀTIC sobre el TOTAL de màquines
-#                   (PRES+NP junts; la barreja la determinen les franges).
-#   none          — sense regles d'equilibri setmanal (només l'equitat mensual).
-RULE_MODES = ("personalitzat", "presencial", "total", "none")
+# Modes d'equilibri:
+#   personalitzat      — la taula manual per mida de setmana (clàssic).
+#   presencial         — target SETMANAL automàtic: la càrrega PRESENCIAL real
+#                        de cada setmana es reparteix proporcional a la jornada.
+#   total              — target SETMANAL automàtic sobre el TOTAL de màquines
+#                        (PRES+NP junts; la barreja la determinen les franges).
+#   mensual_presencial — target MENSUAL automàtic sobre la càrrega PRESENCIAL
+#                        de tot el mes (sense objectiu per setmana).
+#   mensual_total      — target MENSUAL automàtic sobre el TOTAL de màquines
+#                        de tot el mes.
+#   activitat          — target MENSUAL automàtic sobre les instàncies d'UNA
+#                        activitat concreta (camp `balance_activity`).
+#   none               — sense regles d'equilibri (només l'equitat dels trams
+#                        3-4, sempre activa).
+RULE_MODES = (
+    "personalitzat", "presencial", "total",
+    "mensual_presencial", "mensual_total", "activitat", "none",
+)
 
 
 @dataclass
@@ -39,6 +52,8 @@ class PlanningRules:
     target_presential: dict[int, int] = field(default_factory=lambda: dict(_DEFAULT_TARGET_PRESENTIAL))
     # Per defecte: equilibrar per càrrega de feina TOTAL setmanal.
     mode: str = "total"
+    # Activitat a equilibrar quan mode == "activitat" (slot_id del catàleg).
+    balance_activity: str = ""
 
     # ── serialisation ──────────────────────────────────────────────────────────
 
@@ -49,6 +64,7 @@ class PlanningRules:
                 "target_machines": self.target_machines.get(days, 0),
                 "target_presential": self.target_presential.get(days, 0),
                 "mode": self.mode,
+                "balance_activity": self.balance_activity,
             }
             for days in range(1, 6)
         ]
@@ -91,10 +107,21 @@ class PlanningRules:
             candidate = str(df["mode"].dropna().iloc[0]).strip().lower()
             if candidate in RULE_MODES:
                 mode = candidate
+        balance_activity = ""
+        if (
+            "balance_activity" in df.columns
+            and not df["balance_activity"].dropna().empty
+        ):
+            balance_activity = (
+                str(df["balance_activity"].dropna().iloc[0]).strip().upper()
+            )
+            if balance_activity in {"NAN", "NONE"}:
+                balance_activity = ""
         return cls(
             target_machines=target_machines,
             target_presential=target_presential,
             mode=mode,
+            balance_activity=balance_activity,
         )
 
     def to_csv(self, path: Path) -> None:

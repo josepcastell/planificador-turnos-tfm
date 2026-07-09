@@ -250,10 +250,6 @@ def sync_workspace_to_loaded_session() -> None:
         )
 
 
-def delete_current_session_workspace(session_dir: Path, year: int, month: int) -> int:
-    return session_store.delete_current_session_workspace(session_dir, year, month, PDF_OUTPUT_DIR)
-
-
 def create_empty_session_folder(
     session_dir: Path,
     year: int,
@@ -659,21 +655,6 @@ if sidebar_actions.delete_session_clicked:
         set_workflow_state(False)
     else:
         st.sidebar.warning("La sessió ja no existia al disc")
-    st.rerun()
-
-if sidebar_actions.cleanup_clicked:
-    deleted = delete_current_session_workspace(session_dir, year, month)
-    session_store.reset_current_workspace_for_new_session(year)
-    set_workflow_state(False)
-    # Buidar les llistes de Màquines i Llocs (i les seves caixes a la UI).
-    from src.services.machines_locations import save_machines as _sm, save_locations as _sl
-    _sm([])
-    _sl([])
-    # Buidar TOTS els drafts/cachés en memòria de les pestanyes principals
-    # (altrament podrien repoblar els fitxers que acabem de buidar).
-    from src.ui.session_keys import clear_tab_session_state as _clear_keys
-    _clear_keys(st.session_state)
-    st.sidebar.success(f"Sessió netejada ({deleted} fitxers esborrats)")
     st.rerun()
 
 slot_catalog_df = seed_slot_catalog_if_missing(

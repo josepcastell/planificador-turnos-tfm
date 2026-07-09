@@ -183,3 +183,217 @@ class TestBalanceProposal:
         bp.discard_proposal()
         assert not bp.proposal_exists()
         assert pd.read_csv(bp.SCHEDULE_PATH).iloc[0]["professional"] == "P1"
+
+
+MON2 = "2026-01-12"  # dilluns de la setmana següent (W03)
+
+
+class TestMonthlyModes:
+    """Modes mensuals: la càrrega del MES es reparteix sense objectiu
+    setmanal; «activitat» equilibra només les instàncies d'una activitat."""
+
+    def _terms(self, mode, rows, assignments, professionals=("P1", "P2"),
+               balance_activity="", eligibility_df=None, absents=None):
+        profs = list(professionals)
+        model, x, keys_by_day = _setup(rows, profs)
+        for (p, r), val in assignments.items():
+            model.Add(x[p, _make_slot_key(r)] == val)
+        rules = PlanningRules(mode=mode, balance_activity=balance_activity)
+        days = sorted({r.day for r in rows})
+        absent = {p: set() for p in profs}
+        absent.update(absents or {})
+        res = _add_weekly_soft_terms(
+            model, x, profs, days, ["2026-W02", "2026-W03"],
+            {MON: "2026-W02", TUE: "2026-W02", MON2: "2026-W03"},
+            {d: 1 for d in days},
+            absent, keys_by_day,
+            {(p, d): 100 for p in profs for d in days}, set(),
+            planning_rules=rules, eligibility_df=eligibility_df,
+        )
+        return model, res
+
+    def test_mensual_total_ignores_weekly_imbalance(self):
+        # 2 màquines a W02 i 2 a W03. P1 fa tota la W02, P2 tota la W03:
+        # per setmanes seria desequilibrat, però el MES queda 2-2 → 0.
+        rows = [
+            _Row(MON, "MATI", "A", "PRESENCIAL"),
+            _Row(MON, "TARDA", "B", "NO_PRESENCIAL"),
+            _Row(MON2, "MATI", "A", "PRESENCIAL"),
+            _Row(MON2, "TARDA", "B", "NO_PRESENCIAL"),
+        ]
+        asg = {
+            ("P1", rows[0]): 1, ("P1", rows[1]): 1,
+            ("P1", rows[2]): 0, ("P1", rows[3]): 0,
+            ("P2", rows[0]): 0, ("P2", rows[1]): 0,
+            ("P2", rows[2]): 1, ("P2", rows[3]): 1,
+        }
+        model, (ps, po, ns, no) = self._terms("mensual_total", rows, asg)
+        for v in (ps, po, ns, no):
+            assert _solve(model, v) == 0
+
+    def test_mensual_total_penalizes_monthly_deviation(self):
+        # 4 màquines al mes, targets 2-2. P1 en fa 3 i P2 en fa 1 →
+        # shortfall 1 (P2) + overage 1 (P1).
+        rows = [
+            _Row(MON, "MATI", "A", "PRESENCIAL"),
+            _Row(MON, "TARDA", "B", "NO_PRESENCIAL"),
+            _Row(MON2, "MATI", "A", "PRESENCIAL"),
+            _Row(MON2, "TARDA", "B", "NO_PRESENCIAL"),
+        ]
+        asg = {
+            ("P1", rows[0]): 1, ("P1", rows[1]): 1, ("P1", rows[2]): 1,
+            ("P1", rows[3]): 0,
+            ("P2", rows[0]): 0, ("P2", rows[1]): 0, ("P2", rows[2]): 0,
+            ("P2", rows[3]): 1,
+        }
+        model, (ps, po, _ns, _no) = self._terms("mensual_total", rows, asg)
+        assert _solve(model, ps) == 1
+        assert _solve(model, po) == 1
+
+    def test_mensual_presencial_counts_only_pres(self):
+        # 2 PRES + 2 NP al mes. P1 fa les 2 PRES i P2 les 2 NP:
+        # targets PRES 1-1 → shortfall 1 + overage 1; NP no es toca.
+        rows = [
+            _Row(MON, "MATI", "A", "PRESENCIAL"),
+            _Row(MON, "TARDA", "B", "NO_PRESENCIAL"),
+            _Row(MON2, "MATI", "A", "PRESENCIAL"),
+            _Row(MON2, "TARDA", "B", "NO_PRESENCIAL"),
+        ]
+        asg = {
+            ("P1", rows[0]): 1, ("P1", rows[2]): 1,
+            ("P1", rows[1]): 0, ("P1", rows[3]): 0,
+            ("P2", rows[0]): 0, ("P2", rows[2]): 0,
+            ("P2", rows[1]): 1, ("P2", rows[3]): 1,
+        }
+        model, (ps, po, ns, no) = self._terms("mensual_presencial", rows, asg)
+        assert _solve(model, ps) == 1
+        assert _solve(model, po) == 1
+        assert _solve(model, ns) == 0
+        assert _solve(model, no) == 0
+
+    def test_activitat_balances_selected_slot_only(self):
+        # PRIMARI — activitat A: 2 instàncies (targets 1-1). P1 les fa
+        # totes dues → short 1 + over 1 al parell PRES (tram 1).
+        # SECUNDARI — la resta (les 2 B, targets 1-1): P2 les fa totes
+        # dues → short 1 + over 1 al parell NP (tram 2).
+        rows = [
+            _Row(MON, "MATI", "A", "PRESENCIAL"),
+            _Row(MON, "TARDA", "B", "NO_PRESENCIAL"),
+            _Row(MON2, "MATI", "A", "PRESENCIAL"),
+            _Row(MON2, "TARDA", "B", "NO_PRESENCIAL"),
+        ]
+        asg = {
+            ("P1", rows[0]): 1, ("P1", rows[2]): 1,
+            ("P1", rows[1]): 0, ("P1", rows[3]): 0,
+            ("P2", rows[0]): 0, ("P2", rows[2]): 0,
+            ("P2", rows[1]): 1, ("P2", rows[3]): 1,
+        }
+        model, (ps, po, ns, no) = self._terms(
+            "activitat", rows, asg, balance_activity="A",
+        )
+        assert _solve(model, ps) == 1
+        assert _solve(model, po) == 1
+        assert _solve(model, ns) == 1
+        assert _solve(model, no) == 1
+
+    def test_activitat_all_balanced_no_penalty(self):
+        # A 1-1 i B 1-1 entre P1 i P2 → cap penalització en cap parell.
+        rows = [
+            _Row(MON, "MATI", "A", "PRESENCIAL"),
+            _Row(MON, "TARDA", "B", "NO_PRESENCIAL"),
+            _Row(MON2, "MATI", "A", "PRESENCIAL"),
+            _Row(MON2, "TARDA", "B", "NO_PRESENCIAL"),
+        ]
+        asg = {
+            ("P1", rows[0]): 1, ("P1", rows[2]): 0,
+            ("P1", rows[1]): 0, ("P1", rows[3]): 1,
+            ("P2", rows[0]): 0, ("P2", rows[2]): 1,
+            ("P2", rows[1]): 1, ("P2", rows[3]): 0,
+        }
+        model, (ps, po, ns, no) = self._terms(
+            "activitat", rows, asg, balance_activity="A",
+        )
+        for v in (ps, po, ns, no):
+            assert _solve(model, v) == 0
+
+    def test_activitat_eligibility_excludes_denied(self):
+        # P2 té allowed=0 per A → tot el target va a P1 (2). P1 fa les 2 → 0.
+        rows = [
+            _Row(MON, "MATI", "A", "PRESENCIAL"),
+            _Row(MON2, "MATI", "A", "PRESENCIAL"),
+        ]
+        elig = pd.DataFrame(
+            [{"professional_id": "P2", "slot_id": "A", "allowed": 0}]
+        )
+        asg = {
+            ("P1", rows[0]): 1, ("P1", rows[1]): 1,
+            ("P2", rows[0]): 0, ("P2", rows[1]): 0,
+        }
+        model, (ps, po, _ns, _no) = self._terms(
+            "activitat", rows, asg, balance_activity="A", eligibility_df=elig,
+        )
+        assert _solve(model, ps) == 0
+        assert _solve(model, po) == 0
+
+    def test_activitat_normalizes_raw_catalog_id(self):
+        # El catàleg pot dur guions/espais («ECO-DOPPLER»); les claus del
+        # solver estan normalitzades («ECO_DOPPLER»). Sense normalitzar,
+        # el criteri primari quedaria silenciosament inert (regressió A1).
+        rows = [
+            _Row(MON, "MATI", "ECO_DOPPLER", "PRESENCIAL"),
+            _Row(MON2, "MATI", "ECO_DOPPLER", "PRESENCIAL"),
+        ]
+        asg = {
+            ("P1", rows[0]): 1, ("P1", rows[1]): 1,
+            ("P2", rows[0]): 0, ("P2", rows[1]): 0,
+        }
+        model, (ps, po, _ns, _no) = self._terms(
+            "activitat", rows, asg, balance_activity="ECO-DOPPLER",
+        )
+        assert _solve(model, ps) == 1
+        assert _solve(model, po) == 1
+
+    def test_activitat_capacity_counts_only_activity_days(self):
+        # L'activitat només existeix el MON; P2 hi és absent (però present
+        # el MON2). El target primari ha d'anar TOT a P1 — sense el fix,
+        # P2 rebria target impossible i penalitzaria permanentment (M1).
+        rows = [
+            _Row(MON, "MATI", "A", "PRESENCIAL"),
+            _Row(MON, "TARDA", "A", "PRESENCIAL", position=2),
+            _Row(MON2, "MATI", "B", "PRESENCIAL"),
+        ]
+        asg = {
+            ("P1", rows[0]): 1, ("P1", rows[1]): 1, ("P1", rows[2]): 0,
+            ("P2", rows[2]): 1,
+        }
+        model, (ps, po, _ns, _no) = self._terms(
+            "activitat", rows, asg, balance_activity="A",
+            absents={"P2": {MON}},
+        )
+        assert _solve(model, ps) == 0
+        assert _solve(model, po) == 0
+
+    def test_activitat_without_selection_is_inert(self):
+        rows = [_Row(MON, "MATI", "A", "PRESENCIAL")]
+        model, (ps, po, ns, no) = self._terms(
+            "activitat", rows, {("P1", rows[0]): 1}, balance_activity="",
+        )
+        for v in (ps, po, ns, no):
+            assert _solve(model, v) == 0
+
+    def test_roundtrip_new_modes_and_activity(self, tmp_path):
+        p = tmp_path / "rules.csv"
+        PlanningRules(mode="mensual_presencial").to_csv(p)
+        assert PlanningRules.from_csv(p).mode == "mensual_presencial"
+        PlanningRules(mode="mensual_total").to_csv(p)
+        assert PlanningRules.from_csv(p).mode == "mensual_total"
+        PlanningRules(mode="activitat", balance_activity="ECO_PURA").to_csv(p)
+        loaded = PlanningRules.from_csv(p)
+        assert loaded.mode == "activitat"
+        assert loaded.balance_activity == "ECO_PURA"
+        # CSV antic sense columna → activitat buida.
+        pd.DataFrame({
+            "active_days": [5], "target_machines": [4],
+            "target_presential": [2],
+        }).to_csv(p, index=False)
+        assert PlanningRules.from_csv(p).balance_activity == ""

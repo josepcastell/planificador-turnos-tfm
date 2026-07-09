@@ -256,6 +256,7 @@ def generate_weekday(
             target_machines=dict(_r.target_machines),
             target_presential=dict(_r.target_presential),
             mode=force_rules_mode,
+            balance_activity=_r.balance_activity,
         )
     existing_schedule = _read_csv_if_exists(Path("outputs/schedule_weekday.csv"))
     existing_metrics = _read_csv_if_exists(Path("outputs/metrics_weekday.csv"))

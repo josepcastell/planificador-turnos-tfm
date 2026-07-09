@@ -569,11 +569,14 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
     )
     planning_rules = data.get("planning_rules")
     # Mode de les regles d'equilibri: el cap dur dels flips segueix el mateix
-    # criteri que els termes setmanals (personalitzat → taula; presencial →
-    # targets automàtics; total/none → 0 flips més enllà de l'over_fixed).
+    # criteri que els termes tous (personalitzat → taula; presencial →
+    # targets setmanals automàtics; mensual_presencial → target MENSUAL
+    # automàtic amb un únic període «MES»; total/none/mensual_total/
+    # activitat → 0 flips més enllà de l'over_fixed — no fixen cap PRES).
     _rules_mode = (getattr(planning_rules, "mode", "personalitzat")
                    or "personalitzat") if planning_rules is not None else "personalitzat"
     _weekly_pres_targets = None
+    _flip_periods, _flip_period_map = unique_weeks, week_map
     if _rules_mode == "presencial":
         from src.solver.objectives_targets import weekly_auto_targets
         _weekly_pres_targets = weekly_auto_targets(
@@ -581,12 +584,24 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
             week_map, working_map, absent_days_by_prof, capacity_pct_by,
             machine_specs,
         )
-    elif _rules_mode in ("total", "none"):
+    elif _rules_mode == "mensual_presencial":
+        # Sense això els flips NP→PRES quedarien prohibits del tot i el
+        # target presencial mensual no tindria el seu mecanisme de
+        # compensació (com sí que el té el mode setmanal «presencial»).
+        from src.solver.objectives_targets import monthly_auto_targets
+        _monthly_t = monthly_auto_targets(
+            "presencial", quota_hard_professionals, unique_days,
+            working_map, absent_days_by_prof, capacity_pct_by, machine_specs,
+        )
+        _flip_periods = ["MES"]
+        _flip_period_map = {d: "MES" for d in unique_days}
+        _weekly_pres_targets = {(p, "MES"): t for p, t in _monthly_t.items()}
+    elif _rules_mode != "personalitzat":
         _weekly_pres_targets = {}
     _add_flip_target_cap(
-        model, x, pres_flip, quota_hard_professionals, unique_days, unique_weeks,
-        week_map, working_map, absent_days_by_prof, capacity_pct_by,
-        machine_specs, planning_rules=planning_rules,
+        model, x, pres_flip, quota_hard_professionals, unique_days,
+        _flip_periods, _flip_period_map, working_map, absent_days_by_prof,
+        capacity_pct_by, machine_specs, planning_rules=planning_rules,
         weekly_pres_targets=_weekly_pres_targets,
     )
     presential_tolerance = max(0, int(data.get("presential_tolerance", 0) or 0))
@@ -646,7 +661,7 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
         week_map, working_map, absent_days_by_prof, keys_by_day, capacity_pct_by, review_slots,
         planning_rules=planning_rules, machine_specs=machine_specs, pres_flip=pres_flip,
         presential_tolerance=presential_tolerance,
-        peonada_vars=peonada_vars,
+        peonada_vars=peonada_vars, eligibility_df=eligibility_df,
     )
     # Excloem del balanç de presencialitats els facultatius que mai poden
     # fer presencials: presence_mode=NO_PRESENCIAL (p.ex. comodí TLD) i

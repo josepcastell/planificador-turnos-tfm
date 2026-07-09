@@ -159,12 +159,290 @@ def weekly_auto_targets(kind, quota_hard_professionals, unique_days, unique_week
     return out
 
 
+def monthly_auto_targets(kind, quota_hard_professionals, unique_days,
+                         working_map, absent_days_by_prof, capacity_pct_by,
+                         machine_specs):
+    """Target MENSUAL automàtic per facultatiu (modes «mensual_presencial»
+    i «mensual_total»): la càrrega REAL de tot el mes (màquines-grup
+    PRESENCIALS si kind='presencial', totes si kind='total') repartida
+    proporcionalment a la capacitat mensual. Retorna {professional: target}."""
+    from src.solver.objectives_balance import _apportion_by_capacity
+
+    working_days = [d for d in unique_days if working_map.get(d, 1) == 1]
+    load = 0
+    for d in working_days:
+        coupling_groups, machine_keys, presential_keys, _flip = machine_specs[d]
+        if kind == "presencial":
+            load += sum(
+                1 for g in coupling_groups
+                if any(str(sk[3]).upper() == "PRESENCIAL" for sk in g)
+            ) + len(presential_keys)
+        else:
+            load += len(coupling_groups) + len(machine_keys)
+    caps: dict = {}
+    for p in quota_hard_professionals:
+        c = sum(
+            capacity_pct_by[(p, d)] for d in working_days
+            if d not in absent_days_by_prof[p]
+        )
+        if c > 0:
+            caps[p] = c
+    return _apportion_by_capacity(load, sorted(caps), caps)
+
+
+def _add_monthly_soft_terms(model, x, quota_hard_professionals, unique_days,
+                            working_map, absent_days_by_prof, keys_by_day,
+                            capacity_pct_by, specs, mode, rules, pres_flip,
+                            presential_tolerance, eligibility_df=None):
+    """Objectiu tou MENSUAL: tot el període del solve (un mes) es tracta
+    com un ÚNIC bloc — la càrrega real del mes es reparteix entre els
+    facultatius proporcionalment a la seva capacitat mensual, sense cap
+    objectiu per setmana. Tres variants (`mode`):
+
+      mensual_presencial — càrrega = màquines-grup PRESENCIALS del mes;
+                           es compta el PRES de cada facultatiu.
+      mensual_total      — càrrega = TOTES les màquines-grup del mes;
+                           es compta el total de cada facultatiu.
+      activitat          — PRIMARI: instàncies de l'activitat
+                           `rules.balance_activity` al mes, repartides
+                           NOMÉS entre els facultatius ELEGIBLES (si
+                           `eligibility_df` hi és) — un no-elegible amb
+                           target > 0 generaria una penalització
+                           impossible de satisfer. SECUNDARI: la RESTA
+                           de màquines del mes (excloent l'activitat i
+                           els blocs que la contenen) també s'equilibra,
+                           entre TOTS els facultatius actius, per sota
+                           de l'objectiu primari.
+
+    Retorna la mateixa forma que `_add_weekly_soft_terms`:
+        (total_pres_shortfall, total_pres_overage,
+         total_np_ord_shortfall, total_np_ord_overage)
+    amb els dos primers portant la desviació PRIMÀRIA (tram 1) i els dos
+    NP la desviació SECUNDÀRIA de la resta de màquines en mode
+    «activitat» (tram 2) — zero als altres modes, com al «total»
+    setmanal."""
+    from src.solver.objectives_balance import _apportion_by_capacity
+
+    def _zero(name):
+        v = model.NewIntVar(0, 1, name)
+        model.Add(v == 0)
+        return v
+
+    zeros = (
+        "total_weekly_np_ord_shortfall",
+        "total_weekly_np_ord_overage",
+    )
+
+    working_days = [d for d in unique_days if working_map.get(d, 1) == 1]
+
+    activity = ""
+    if mode == "activitat":
+        # normalize_slot: el catàleg (i per tant balance_activity) pot dur
+        # espais o guions; les claus del solver ja estan normalitzades —
+        # sense això, "ECO-DOPPLER" mai coincidiria amb "ECO_DOPPLER" i el
+        # criteri primari quedaria silenciosament inert.
+        from src.domain.slot_norm import normalize_slot
+        activity = normalize_slot(
+            str(getattr(rules, "balance_activity", "") or "")
+        )
+        if not activity:
+            # Sense activitat seleccionada no hi ha res a equilibrar.
+            return (
+                _zero("total_weekly_presential_shortfall"),
+                _zero("total_weekly_presential_overage"),
+                _zero(zeros[0]), _zero(zeros[1]),
+            )
+        act_keys_by_day: dict = {}
+        for d in working_days:
+            act_keys_by_day[d] = [
+                sk for sk in keys_by_day.get(d, [])
+                if str(sk[2]).strip().upper() == activity
+            ]
+        load = sum(len(v) for v in act_keys_by_day.values())
+    elif mode == "mensual_presencial":
+        load = 0
+        for d in working_days:
+            coupling_groups, _mk, presential_keys, _flip = specs[d]
+            load += sum(
+                1 for g in coupling_groups
+                if any(str(sk[3]).upper() == "PRESENCIAL" for sk in g)
+            ) + len(presential_keys)
+    else:  # mensual_total
+        load = 0
+        for d in working_days:
+            coupling_groups, machine_keys, _pk, _flip = specs[d]
+            load += len(coupling_groups) + len(machine_keys)
+
+    # Elegibilitat per al mode «activitat»: parell absent ⇒ permès (mateix
+    # criteri que `_add_eligibility_soft`), així que només queden fora del
+    # repartiment els facultatius amb `allowed=0` explícit per l'activitat.
+    denied_for_activity: set = set()
+    if activity and eligibility_df is not None and not getattr(
+        eligibility_df, "empty", True
+    ):
+        from src.domain.slot_norm import normalize_slot as _norm_act
+        for r in eligibility_df.itertuples(index=False):
+            if _norm_act(str(getattr(r, "slot_id", ""))) != activity:
+                continue
+            try:
+                ok = int(float(getattr(r, "allowed", 1)))
+            except (TypeError, ValueError):
+                ok = 1
+            if ok == 0:
+                denied_for_activity.add(
+                    str(getattr(r, "professional_id", "")).strip().upper()
+                )
+
+    # Capacitat mensual per facultatiu (suma de jornades dels seus dies
+    # actius del mes). `month_capacity_all` inclou tothom amb capacitat;
+    # `month_capacity` (repartiment PRIMARI) en treu els no-elegibles per
+    # a l'activitat i, en mode «activitat», es calcula NOMÉS sobre els
+    # dies on l'activitat té instàncies — un facultatiu que mai hi és
+    # aquells dies (guàrdies/absències recurrents) no ha de rebre un
+    # target impossible de complir.
+    act_days: set = set()
+    if mode == "activitat":
+        act_days = {d for d, v in act_keys_by_day.items() if v}
+    month_capacity_all: dict = {}
+    month_capacity: dict = {}
+    active_days_by_prof: dict = {}
+    for p in quota_hard_professionals:
+        adays = [
+            d for d in working_days if d not in absent_days_by_prof[p]
+        ]
+        active_days_by_prof[p] = adays
+        cap = sum(capacity_pct_by[(p, d)] for d in adays)
+        if cap > 0:
+            month_capacity_all[p] = cap
+        if str(p).strip().upper() in denied_for_activity:
+            continue
+        cap_primary = (
+            sum(capacity_pct_by[(p, d)] for d in adays if d in act_days)
+            if mode == "activitat" else cap
+        )
+        if cap_primary > 0:
+            month_capacity[p] = cap_primary
+
+    actius = sorted(month_capacity)
+    targets = _apportion_by_capacity(load, actius, month_capacity)
+
+    short_terms: list = []
+    over_terms: list = []
+    for p in actius:
+        adays = active_days_by_prof[p]
+        if mode == "activitat":
+            count_terms = [
+                x[p, sk] for d in adays for sk in act_keys_by_day.get(d, [])
+                if (p, sk) in x
+            ]
+        else:
+            count_terms = []
+            for d in adays:
+                mt, pmt = _collect_machine_terms_for_day(
+                    model, x, p, d, specs[d], "soft_month_assign",
+                    pres_flip=pres_flip,
+                )
+                count_terms.extend(
+                    pmt if mode == "mensual_presencial" else mt
+                )
+        target = targets.get(p, 0)
+        if not count_terms and target <= 0:
+            continue
+        n = max(1, len(count_terms))
+        cnt = model.NewIntVar(0, n, f"monthly_count_{mode}_{p}")
+        model.Add(cnt == (sum(count_terms) if count_terms else 0))
+        short = model.NewIntVar(0, max(1, target), f"monthly_short_{p}")
+        model.Add(short >= target - cnt - presential_tolerance)
+        model.Add(short >= 0)
+        short_terms.append(short)
+        over = model.NewIntVar(0, n, f"monthly_over_{p}")
+        model.Add(over >= cnt - target - presential_tolerance)
+        model.Add(over >= 0)
+        over_terms.append(over)
+
+    ub = max(1, sum(targets.values()) + load)
+    total_short = model.NewIntVar(0, ub, "total_weekly_presential_shortfall")
+    model.Add(total_short == (sum(short_terms) if short_terms else 0))
+    total_over = model.NewIntVar(0, ub, "total_weekly_presential_overage")
+    model.Add(total_over == (sum(over_terms) if over_terms else 0))
+
+    # ── SECUNDARI (només mode «activitat»): la RESTA de màquines del mes
+    # també s'equilibra — l'activitat és el criteri PRINCIPAL (tram 1) i
+    # la resta va al parell NP (tram 2), per sota. S'exclouen del
+    # recompte i de la càrrega les instàncies de l'activitat i els blocs
+    # vinculats que la contenen (aquests ja «són» l'activitat: una sola
+    # persona cobreix el bloc). El repartiment inclou TOTS els
+    # facultatius actius (l'elegibilitat per slot ja la vigila el terme
+    # d'elegibilitat propi). ──
+    if mode != "activitat":
+        return total_short, total_over, _zero(zeros[0]), _zero(zeros[1])
+
+    rest_specs: dict = {}
+    rest_load = 0
+    for d in working_days:
+        coupling_groups, machine_keys, presential_keys, flip = specs[d]
+        fg = [
+            g for g in coupling_groups
+            if not any(str(sk[2]).strip().upper() == activity for sk in g)
+        ]
+        fm = [
+            sk for sk in machine_keys
+            if str(sk[2]).strip().upper() != activity
+        ]
+        fp = [
+            sk for sk in presential_keys
+            if str(sk[2]).strip().upper() != activity
+        ]
+        rest_specs[d] = (fg, fm, fp, flip)
+        rest_load += len(fg) + len(fm)
+
+    rest_actius = sorted(month_capacity_all)
+    rest_targets = _apportion_by_capacity(
+        rest_load, rest_actius, month_capacity_all,
+    )
+    rest_short_terms: list = []
+    rest_over_terms: list = []
+    for p in rest_actius:
+        count_terms = []
+        for d in active_days_by_prof[p]:
+            mt, _pmt = _collect_machine_terms_for_day(
+                model, x, p, d, rest_specs[d], "soft_month_rest",
+                pres_flip=pres_flip,
+            )
+            count_terms.extend(mt)
+        target = rest_targets.get(p, 0)
+        if not count_terms and target <= 0:
+            continue
+        n = max(1, len(count_terms))
+        cnt = model.NewIntVar(0, n, f"monthly_rest_count_{p}")
+        model.Add(cnt == (sum(count_terms) if count_terms else 0))
+        short = model.NewIntVar(0, max(1, target), f"monthly_rest_short_{p}")
+        model.Add(short >= target - cnt - presential_tolerance)
+        model.Add(short >= 0)
+        rest_short_terms.append(short)
+        over = model.NewIntVar(0, n, f"monthly_rest_over_{p}")
+        model.Add(over >= cnt - target - presential_tolerance)
+        model.Add(over >= 0)
+        rest_over_terms.append(over)
+
+    rest_ub = max(1, sum(rest_targets.values()) + rest_load)
+    total_np_short = model.NewIntVar(0, rest_ub, zeros[0])
+    model.Add(
+        total_np_short == (sum(rest_short_terms) if rest_short_terms else 0)
+    )
+    total_np_over = model.NewIntVar(0, rest_ub, zeros[1])
+    model.Add(
+        total_np_over == (sum(rest_over_terms) if rest_over_terms else 0)
+    )
+    return total_short, total_over, total_np_short, total_np_over
+
+
 def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, unique_weeks,
                            week_map, working_map, absent_days_by_prof, keys_by_day,
                            capacity_pct_by, review_slots, planning_rules=None,
                            machine_specs=None, pres_flip=None,
                            presential_tolerance: int = 0,
-                           peonada_vars=None):
+                           peonada_vars=None, eligibility_df=None):
     """Objectiu tou per setmana × facultatiu: acostar PRES i NP_ord al
     target individual (planning_rules, escalat als dies efectius). Tant
     el shortfall com l'overage es penalitzen, perquè el target és un
@@ -198,6 +476,16 @@ def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, uniq
             _zero("total_weekly_presential_overage"),
             _zero("total_weekly_np_ord_shortfall"),
             _zero("total_weekly_np_ord_overage"),
+        )
+
+    # Modes MENSUALS (presencial/total de tot el mes o activitat concreta):
+    # deleguem al helper mensual — cap objectiu per setmana.
+    if mode in ("mensual_presencial", "mensual_total", "activitat"):
+        return _add_monthly_soft_terms(
+            model, x, quota_hard_professionals, unique_days,
+            working_map, absent_days_by_prof, keys_by_day, capacity_pct_by,
+            specs, mode, rules, pres_flip, presential_tolerance,
+            eligibility_df=eligibility_df,
         )
 
     # Modes automàtics: target per (professional, setmana) derivat de la

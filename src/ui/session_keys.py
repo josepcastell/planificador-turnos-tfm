@@ -2,11 +2,11 @@
 
 Cada grup llista totes les claus que pertanyen a una pestanya principal,
 incloent drafts, signatures d'autosave, nonces d'editor i estats de selecció.
-S'utilitza a la neteja de sessió de la barra lateral (buida els drafts en
+S'utilitza en canviar, restaurar o eliminar una sessió (buida els drafts en
 memòria de totes les pestanyes) i als editors, per mantenir tot el
 "vocabulari" en un únic lloc.
 
-Si afegeixes una nova clau a un editor, registra-la aquí perquè la neteja
+Si afegeixes una nova clau a un editor, registra-la aquí perquè el canvi
 de sessió la pugui buidar correctament.
 """
 
@@ -44,6 +44,7 @@ RESTRICCIONS: tuple[str, ...] = (
     "planning_rules_draft",
     "planning_rules_editor_nonce",
     "planning_rules_mode",
+    "planning_rules_balance_activity",
 )
 
 # ── Generar i revisar ─────────────────────────────────────────────────────
@@ -106,7 +107,7 @@ SESSION_SCOPED_KEY_PREFIXES: tuple[str, ...] = (
 def clear_tab_session_state(session_state) -> None:
     """Buida TOTS els drafts/cachés en memòria lligats a la sessió: les
     claus registrades per pestanya i les famílies dinàmiques per prefix.
-    S'ha de cridar en canviar de sessió i en netejar-la."""
+    S'ha de cridar en canviar, restaurar o eliminar la sessió."""
     for keys in TAB_SESSION_KEYS.values():
         for key in keys:
             session_state.pop(key, None)

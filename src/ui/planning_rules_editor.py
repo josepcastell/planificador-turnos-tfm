@@ -75,9 +75,15 @@ _MODE_LABELS = {
     "none": "No equilibrar",
     "presencial": "Equilibrar per càrrega presencial setmanal",
     "total": "Equilibrar per càrrega total setmanal",
+    "mensual_presencial": "Equilibrar per càrrega presencial mensual",
+    "mensual_total": "Equilibrar per càrrega total mensual",
+    "activitat": "Equilibrar per càrrega d'una activitat concreta",
     "personalitzat": "Personalitzar (taula per tipus de setmana)",
 }
-_MODE_ORDER = ["none", "presencial", "total", "personalitzat"]
+_MODE_ORDER = [
+    "none", "presencial", "total",
+    "mensual_presencial", "mensual_total", "activitat", "personalitzat",
+]
 _MODE_HELP = {
     "none": "El solver segueix NOMÉS les franges i l'equitat mensual entre "
             "facultatius. Cap objectiu setmanal.",
@@ -88,18 +94,51 @@ _MODE_HELP = {
     "total": "Cada setmana, el TOTAL de màquines es reparteix automàticament "
              "(presencials i no presencials juntes; la barreja la determinen "
              "les franges).",
+    "mensual_presencial": "La càrrega PRESENCIAL de TOT EL MES es reparteix "
+                          "proporcionalment a la jornada, sense cap objectiu "
+                          "per setmana: un facultatiu pot carregar-se més una "
+                          "setmana i menys una altra mentre el mes quadri.",
+    "mensual_total": "El TOTAL de màquines de TOT EL MES es reparteix "
+                     "proporcionalment a la jornada, sense cap objectiu per "
+                     "setmana (presencials i no presencials juntes).",
+    "activitat": "Criteri PRINCIPAL: les instàncies de l'activitat triada "
+                 "es reparteixen equitativament entre els facultatius "
+                 "elegibles al llarg del mes, proporcionalment a la "
+                 "jornada. En SEGON terme, la resta de màquines del mes "
+                 "també s'equilibra entre tots els facultatius.",
     "personalitzat": "Tu fixes els dies presencials i no presencials per "
                      "tipus de setmana (comportament clàssic).",
 }
 
 
+def _weekday_activity_options() -> list[str]:
+    """Activitats candidates per al mode «activitat»: els slots del catàleg
+    actius entre setmana (els que apareixen a les franges), SENSE les
+    revisions — tenen assignació pròpia (continuïtat + equilibri de
+    revisions) i equilibrar-les des d'aquí crearia objectius en conflicte."""
+    from src.services.slot_catalog import (
+        load_slot_catalog,
+        review_slot_ids,
+        weekday_slot_ids,
+    )
+    try:
+        catalog = load_slot_catalog(Path("data/slot_catalog.csv"))
+    except Exception:
+        return []
+    reviews = {str(r).strip().upper() for r in review_slot_ids(catalog)}
+    return [
+        s for s in weekday_slot_ids(catalog)
+        if str(s).strip().upper() not in reviews
+    ]
+
+
 def render_planning_rules_editor(rules_path: Path = _RULES_PATH) -> PlanningRules:
-    """Render the weekly target rules editor. Returns current PlanningRules."""
+    """Render the balance rules editor. Returns current PlanningRules."""
     rules_path = Path(rules_path)
     rules = _load_rules(rules_path)
 
     mode_choice = st.selectbox(
-        "Mode d'equilibri setmanal",
+        "Mode d'equilibri",
         _MODE_ORDER,
         index=_MODE_ORDER.index(rules.mode) if rules.mode in _MODE_ORDER else 2,
         format_func=lambda m: _MODE_LABELS[m],
@@ -114,6 +153,44 @@ def render_planning_rules_editor(rules_path: Path = _RULES_PATH) -> PlanningRule
         rules.mode = mode_choice
         rules.to_csv(rules_path)
         st.toast(f"Mode d'equilibri: {_MODE_LABELS[mode_choice]}", icon="⚖️")
+
+    if mode_choice == "activitat":
+        options = _weekday_activity_options()
+        if not options:
+            st.warning(
+                "No hi ha activitats al catàleg entre setmana. Crea-les "
+                "primer a la pestanya de Franges."
+            )
+            return rules
+        current = rules.balance_activity if rules.balance_activity in options else None
+        if rules.balance_activity and current is None:
+            st.warning(
+                f"L'activitat guardada «{rules.balance_activity}» ja no és "
+                "al catàleg. Tria'n una altra — mentrestant, l'equilibri "
+                "per activitat no s'aplicarà."
+            )
+        # Placeholder mentre no hi ha cap tria vàlida: mai persistim una
+        # activitat que l'usuari no hagi seleccionat explícitament.
+        display_options = options if current is not None else ["", *options]
+        activity_choice = st.selectbox(
+            "Activitat a equilibrar",
+            display_options,
+            index=display_options.index(current) if current is not None else 0,
+            format_func=lambda v: v or "— tria una activitat —",
+            key="planning_rules_balance_activity",
+            help="El solver reparteix les instàncies d'aquesta activitat "
+                 "entre els facultatius elegibles, proporcionalment a la "
+                 "jornada de cadascú.",
+        )
+        if not activity_choice:
+            st.info(
+                "Sense activitat triada, en generar no s'aplicarà cap "
+                "equilibri per activitat."
+            )
+        elif activity_choice != rules.balance_activity:
+            rules.balance_activity = activity_choice
+            rules.to_csv(rules_path)
+            st.toast(f"Equilibrant per: {activity_choice}", icon="⚖️")
 
     if mode_choice != "personalitzat":
         return rules
@@ -166,6 +243,11 @@ def render_planning_rules_editor(rules_path: Path = _RULES_PATH) -> PlanningRule
     )
 
     updated_rules = _rules_from_dataframe(edited)
+    # Preservem mode i activitat: `_rules_from_dataframe` només reconstrueix
+    # la taula — sense això, l'autosave de la taula escriuria el mode per
+    # defecte («total») al CSV tot i que el desplegable diu «personalitzat».
+    updated_rules.mode = mode_choice
+    updated_rules.balance_activity = rules.balance_activity
 
     def _persist(_df: pd.DataFrame) -> None:
         updated_rules.to_csv(rules_path)

@@ -9,7 +9,6 @@ from src.services.session_store import list_session_snapshots
 
 @dataclass(frozen=True)
 class SessionSidebarActions:
-    cleanup_clicked: bool
     restore_clicked: bool
     selected_snapshot: Path | None
     delete_session_clicked: bool
@@ -81,17 +80,8 @@ def render_session_sidebar_actions(session_dir: Path) -> SessionSidebarActions:
         else:
             st.caption("Cap versió guardada encara.")
 
-    cleanup_clicked = False
     delete_session_clicked = False
     if session_dir.exists():
-        cleanup_clicked = _confirmed_button(
-            "Netejar sessió",
-            key="cleanup_session_button",
-            help_text="Esborra totes les entrades de la sessió actual i deixa el "
-                      "workspace en estat inicial (fitxers buits amb les capçaleres).",
-            warn_text="Es buidaran **totes** les entrades de la sessió actual. "
-                      "Aquesta acció no es pot desfer.",
-        )
         delete_session_clicked = _confirmed_button(
             "🗑️ Eliminar sessió",
             key="delete_session_button",
@@ -102,7 +92,6 @@ def render_session_sidebar_actions(session_dir: Path) -> SessionSidebarActions:
         )
 
     return SessionSidebarActions(
-        cleanup_clicked=cleanup_clicked,
         restore_clicked=restore_clicked,
         selected_snapshot=selected_snapshot,
         delete_session_clicked=delete_session_clicked,

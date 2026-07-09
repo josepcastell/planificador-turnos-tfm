@@ -25,11 +25,13 @@ CSV_HEADERS: dict[str, str] = {
     "data/weekday/weekly_slot_templates.csv":
         "weekday_name,franja,slot_id,presentiality,work_mode,required_staff,"
         "is_active,doubled,linked_to,week_interval,week_offset\n",
-    # Roda d'assignació: activitats que es reparteixen per torn rotatori.
-    "data/weekday/wheel_slots.csv": "slot_id,professionals\n",
+    # Roda d'assignació: activitats que es reparteixen per torn rotatori
+    # (weekday_name buit = tots els dies; o roda pròpia per dia concret).
+    "data/weekday/wheel_slots.csv": "slot_id,weekday_name,professionals\n",
     "data/maquines.csv": "nom\n",
     "data/llocs.csv": "nom\n",
-    "data/planning_rules.csv": "active_days,target_machines,target_presential\n",
+    "data/planning_rules.csv":
+        "active_days,target_machines,target_presential,mode,balance_activity\n",
     # Operatives (indisponibilitats, guàrdies, comitès, preassignacions)
     "data/comite/assignments.csv":
         "professional_id,comite_name,comite_type,specific_day,weekday,notes\n",

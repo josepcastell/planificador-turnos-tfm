@@ -311,3 +311,61 @@ class TestWeeklyCountingSpecs:
         assert len(coupling) == 1
         assert len(coupling[0]) == 3
         assert machine == []
+
+
+class TestLinkDotMaps:
+    """Punt de color propi per bloc al calendari de Franges (UI)."""
+
+    def _tpl(self, rows):
+        return pd.DataFrame(
+            rows,
+            columns=[
+                "weekday_name", "franja", "slot_id", "presentiality",
+                "work_mode", "required_staff", "linked_to",
+            ],
+        )
+
+    def test_same_block_same_dot_across_days(self):
+        from src.ui.weekday_slot_editor import _link_dot_maps
+        df = self._tpl([
+            ("MONDAY", "MATI", "ECO", "PRESENCIAL", "NORMAL", 1, "MX"),
+            ("MONDAY", "MATI", "MX", "PRESENCIAL", "NORMAL", 1, ""),
+            ("TUESDAY", "MATI", "ECO", "PRESENCIAL", "NORMAL", 1, "MX"),
+            ("TUESDAY", "MATI", "MX", "PRESENCIAL", "NORMAL", 1, ""),
+        ])
+        _, dots = _link_dot_maps(df)
+        assert (
+            dots[("MONDAY", "MATI", "ECO")]
+            == dots[("MONDAY", "MATI", "MX")]
+            == dots[("TUESDAY", "MATI", "ECO")]
+        )
+
+    def test_different_blocks_get_different_dots(self):
+        from src.ui.weekday_slot_editor import _link_dot_maps
+        df = self._tpl([
+            ("MONDAY", "MATI", "ECO", "PRESENCIAL", "NORMAL", 1, "MX"),
+            ("MONDAY", "MATI", "MX", "PRESENCIAL", "NORMAL", 1, ""),
+            ("MONDAY", "TARDA", "UFM", "PRESENCIAL", "NORMAL", 1, "RM"),
+            ("MONDAY", "TARDA", "RM", "PRESENCIAL", "NORMAL", 1, ""),
+        ])
+        groups, dots = _link_dot_maps(df)
+        assert len(groups) == 2
+        assert (
+            dots[("MONDAY", "MATI", "ECO")]
+            != dots[("MONDAY", "TARDA", "UFM")]
+        )
+
+    def test_unlinked_slot_has_no_dot(self):
+        from src.ui.weekday_slot_editor import _link_dot_maps
+        df = self._tpl([
+            ("MONDAY", "MATI", "ECO", "PRESENCIAL", "NORMAL", 1, "MX"),
+            ("MONDAY", "MATI", "MX", "PRESENCIAL", "NORMAL", 1, ""),
+            ("WEDNESDAY", "MATI", "TEL", "PRESENCIAL", "NORMAL", 1, ""),
+        ])
+        _, dots = _link_dot_maps(df)
+        assert ("WEDNESDAY", "MATI", "TEL") not in dots
+
+    def test_empty_template_no_groups(self):
+        from src.ui.weekday_slot_editor import _link_dot_maps
+        groups, dots = _link_dot_maps(self._tpl([]))
+        assert groups == {} and dots == {}

@@ -126,8 +126,10 @@ def render_weekday_work_slot_editor(
     st.subheader("Franges fixes setmanals")
     st.caption(
         "Patró setmanal de slots. Clica una franja per editar-la o «+» per "
-        "afegir-ne una de nova. **🔁** = doblada · **🔗** = vinculada amb "
-        "una altra màquina · **🔁🔗** = doblada *i* vinculada."
+        "afegir-ne una de nova. **🔁** = doblada · **punt de color** "
+        "(🔴🟠🟡🟢🔵…) = vinculada: cada **bloc** de màquines vinculades té "
+        "el seu propi color, igual a tots els dies on apareix el bloc "
+        "(fins a 8 colors; amb més blocs es repeteixen)."
     )
     _render_selected_fixed_slot_editor(
         templates_df,
@@ -546,9 +548,11 @@ def _render_linked_groups_editor(
 
         groups = linked_groups_in_template(templates_df, wd, fr)
         if groups:
+            dot_by_group, _ = _link_dot_maps(templates_df)
             for gi, g in enumerate(groups):
                 col1, col2 = st.columns([5, 1])
-                col1.markdown("🔗 " + "  +  ".join(g))
+                _dot = dot_by_group.get(tuple(sorted(g)), "🔗")
+                col1.markdown(f"{_dot} " + "  +  ".join(g))
                 if col2.button(
                     "Desvincular",
                     key=f"linkgrp_rm_{wd}_{fr}_{gi}",
@@ -805,6 +809,39 @@ def _link_partner_for_template_cell(
     return ""
 
 
+_LINK_DOTS = ("🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "🟤", "⚫")
+
+
+def _link_dot_maps(
+    templates_df: pd.DataFrame,
+) -> tuple[dict[tuple, str], dict[tuple[str, str, str], str]]:
+    """Assigna un PUNT DE COLOR propi a cada bloc de màquines vinculades:
+    mateixos membres = mateix color a tots els dies; blocs diferents =
+    colors diferents (fins a 8, després es reciclen). Retorna:
+      · dot_by_group: {tuple(membres ordenats) → punt}
+      · dot_by_slot: {(weekday_name, franja, slot_id) → punt}"""
+    from src.services.slot_catalog import linked_groups_in_template
+    groups_by_wf: dict[tuple[str, str], list[list[str]]] = {}
+    all_groups: set[tuple] = set()
+    for wd in WEEKDAY_TEMPLATE_COLUMNS:
+        for fr in FRANJA_OPTIONS:
+            gs = linked_groups_in_template(templates_df, wd, fr)
+            groups_by_wf[(wd, fr)] = gs
+            for g in gs:
+                all_groups.add(tuple(sorted(g)))
+    dot_by_group = {
+        g: _LINK_DOTS[i % len(_LINK_DOTS)]
+        for i, g in enumerate(sorted(all_groups))
+    }
+    dot_by_slot: dict[tuple[str, str, str], str] = {}
+    for (wd, fr), gs in groups_by_wf.items():
+        for g in gs:
+            dot = dot_by_group[tuple(sorted(g))]
+            for m in g:
+                dot_by_slot[(wd, fr, str(m).strip().upper())] = dot
+    return dot_by_group, dot_by_slot
+
+
 def _render_franja_button(
     weekday_name: str,
     weekday_idx: int,
@@ -814,18 +851,19 @@ def _render_franja_button(
     is_doubled: bool,
     is_linked: bool = False,
     link_partner: str | None = None,
+    link_dot: str = "🔗",
 ) -> None:
     """Renderitza el botó d'edició d'una franja fixa amb marcadors
-    visuals al label per a slots doblats (🔁) i/o vinculats (🔗).
-    La llegenda dels símbols s'explica fora de les franges (vegeu
-    `render_weekday_work_slot_editor`)."""
+    visuals al label per a slots doblats (🔁) i/o vinculats (punt de
+    color PROPI de cada bloc). La llegenda s'explica fora de les franges
+    (vegeu `render_weekday_work_slot_editor`)."""
     prefix = ""
     if is_doubled and is_linked:
-        prefix = "🔁🔗 "
+        prefix = f"🔁{link_dot} "
     elif is_doubled:
         prefix = "🔁 "
     elif is_linked:
-        prefix = "🔗 "
+        prefix = f"{link_dot} "
     slot_label = f"{prefix}{slot_row.slot_id} · {pres_abbr}"
     extra = []
     if is_doubled:
@@ -869,6 +907,9 @@ def _render_fixed_weekly_calendar(
     # Mapatge de vincles per (weekday_name, franja, slot_id) → partner,
     # derivat dels templates (NO del catàleg). Bidireccional.
     partner_map = _link_partner_map_from_templates(templates_df)
+    # Punt de color propi per a cada bloc vinculat (mateix bloc = mateix
+    # color a tots els dies).
+    _, dot_by_slot = _link_dot_maps(templates_df)
     for weekday_idx, weekday_name in enumerate(WEEKDAY_TEMPLATE_COLUMNS):
         with fixed_cols[weekday_idx]:
             with st.container(border=True):
@@ -930,6 +971,9 @@ def _render_fixed_weekly_calendar(
                                 pres_abbr, is_doubled,
                                 is_linked=is_linked,
                                 link_partner=partner if is_linked else None,
+                                link_dot=dot_by_slot.get(
+                                    (weekday_name, franja, sid), "🔗",
+                                ),
                             )
                         if st.button(
                             "+",

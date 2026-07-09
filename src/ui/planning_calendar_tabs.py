@@ -389,6 +389,32 @@ def render_weekday_planning_tab(
     schedule_exists = (
         weekday_schedule_path.exists() and weekday_schedule_path.stat().st_size > 0
     )
+    # Mode «activitat» sense activitat vàlida: la generació funcionaria però
+    # l'equilibri per activitat quedaria silenciosament inert — avisem aquí,
+    # no només dins l'editor de regles (que potser no s'obre).
+    from src.domain.planning_rules import PlanningRules
+    _rules_gen = PlanningRules.from_csv(Path("data/planning_rules.csv"))
+    if _rules_gen.mode == "activitat":
+        from src.services.slot_catalog import load_slot_catalog, weekday_slot_ids
+        try:
+            _act_opts = weekday_slot_ids(
+                load_slot_catalog(Path("data/slot_catalog.csv"))
+            )
+        except Exception:
+            _act_opts = []
+        if not _rules_gen.balance_activity:
+            st.warning(
+                "Les regles d'equilibri estan en mode «activitat» però no "
+                "hi ha cap activitat triada: en generar no s'aplicarà cap "
+                "equilibri per activitat. Tria-la a Restriccions › Regles "
+                "d'equilibri."
+            )
+        elif _rules_gen.balance_activity not in _act_opts:
+            st.warning(
+                f"L'activitat de l'equilibri «{_rules_gen.balance_activity}» "
+                "ja no és al catàleg: l'equilibri per activitat no tindrà "
+                "efecte. Revisa Restriccions › Regles d'equilibri."
+            )
     gen_btn_col, exp_general_col, exp_byprof_col, gen_progress_col = st.columns(
         [1, 1, 1, 2]
     )

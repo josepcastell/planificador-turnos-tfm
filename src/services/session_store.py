@@ -17,7 +17,6 @@ class SessionFileSpec:
     """
     path_template: str
     saved_as: str | None
-    cleanup_group: str | None = None
     on_new_session: str = "keep"
     blank_header: str | None = None
 
@@ -26,142 +25,142 @@ _SESSION_FILE_REGISTRY: list[SessionFileSpec] = [
     # Festius i calendari base
     SessionFileSpec(
         "data/derived/public_holidays_{year}.csv",
-        saved_as="input", cleanup_group="Festius i calendari base",
+        saved_as="input",
         on_new_session="blank",
         blank_header=CSV_HEADERS["data/derived/public_holidays_{year}.csv"],
     ),
     SessionFileSpec(
         "data/base_calendar_overrides_{year}.csv",
-        saved_as="input", cleanup_group="Festius i calendari base",
+        saved_as="input",
         on_new_session="blank",
         blank_header=CSV_HEADERS["data/base_calendar_overrides_{year}.csv"],
     ),
     SessionFileSpec(
         "data/base_calendar_{year}.csv",
-        saved_as="generated", cleanup_group="Festius i calendari base",
+        saved_as="generated",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "data/weekday/day_info.csv",
-        saved_as="generated", cleanup_group="Festius i calendari base",
+        saved_as="generated",
         on_new_session="delete",
     ),
     # Franges puntuals i calendaris de mòduls
     SessionFileSpec(
         "data/weekday/template_overrides_{year}.csv",
-        saved_as="input", cleanup_group="Franges puntuals i calendaris de mòduls",
+        saved_as="input",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "data/weekday/calendar_slots.csv",
-        saved_as="generated", cleanup_group="Franges puntuals i calendaris de mòduls",
+        saved_as="generated",
         on_new_session="delete",
     ),
     # Indisponibilitats, guàrdies i reduccions
     SessionFileSpec(
         "data/guards/assignments.csv",
-        saved_as="input", cleanup_group="Indisponibilitats, guàrdies i reduccions",
+        saved_as="input",
         on_new_session="blank", blank_header=CSV_HEADERS["data/guards/assignments.csv"],
     ),
     SessionFileSpec(
         "data/absences/assignments.csv",
-        saved_as="input", cleanup_group="Indisponibilitats, guàrdies i reduccions",
+        saved_as="input",
         on_new_session="blank", blank_header=CSV_HEADERS["data/absences/assignments.csv"],
     ),
     SessionFileSpec(
         "data/weekday/unavailability.csv",
-        saved_as="input", cleanup_group="Indisponibilitats, guàrdies i reduccions",
+        saved_as="input",
         on_new_session="blank", blank_header=CSV_HEADERS["data/weekday/unavailability.csv"],
     ),
     # Assignacions manuals
     SessionFileSpec(
         "data/weekday/preassignments.csv",
-        saved_as="input", cleanup_group="Assignacions manuals",
+        saved_as="input",
         on_new_session="blank", blank_header=CSV_HEADERS["data/weekday/preassignments.csv"],
     ),
     SessionFileSpec(
         "data/weekday/fixed_machines.csv",
-        saved_as="input", cleanup_group="Assignacions manuals",
+        saved_as="input",
         on_new_session="blank", blank_header=CSV_HEADERS["data/weekday/fixed_machines.csv"],
     ),
     # Comitès
     SessionFileSpec(
         "data/comite/assignments.csv",
-        saved_as="input", cleanup_group="Comitès",
+        saved_as="input",
         on_new_session="blank", blank_header=CSV_HEADERS["data/comite/assignments.csv"],
     ),
     # Objectius de mètriques
     # Restriccions derivades
     SessionFileSpec(
         "data/derived/guard_constraints_{year}.csv",
-        saved_as="generated", cleanup_group="Restriccions derivades",
+        saved_as="generated",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "data/derived/unavailability_from_absences_{year}.csv",
-        saved_as="generated", cleanup_group="Restriccions derivades",
+        saved_as="generated",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "data/derived/unavailability_{year}.csv",
-        saved_as="generated", cleanup_group="Restriccions derivades",
+        saved_as="generated",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "data/derived/unavailability_weekday_{year}.csv",
-        saved_as="generated", cleanup_group="Restriccions derivades",
+        saved_as="generated",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "data/derived/preassignments_weekday_{year}.csv",
-        saved_as="generated", cleanup_group="Restriccions derivades",
+        saved_as="generated",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "data/derived/guard_schedule_annotations_{year}.csv",
-        saved_as="generated", cleanup_group="Restriccions derivades",
+        saved_as="generated",
         on_new_session="delete",
     ),
     # Planning i mètriques
     SessionFileSpec(
         "outputs/schedule_weekday.csv",
-        saved_as="generated", cleanup_group="Planning i mètriques",
+        saved_as="generated",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "outputs/metrics_weekday.csv",
-        saved_as="generated", cleanup_group="Planning i mètriques",
+        saved_as="generated",
         on_new_session="delete",
     ),
     SessionFileSpec(
         "outputs/schedule_weekday_before_reajust.csv",
-        saved_as=None, cleanup_group="Planning i mètriques",
+        saved_as=None,
         on_new_session="delete",
     ),
     # Dades mestres
     SessionFileSpec(
         "data/professionals.csv",
-        saved_as="input", cleanup_group="Dades mestres",
+        saved_as="input",
     ),
     SessionFileSpec(
         "data/eligibility.csv",
-        saved_as="input", cleanup_group="Dades mestres",
+        saved_as="input",
     ),
     SessionFileSpec(
         "data/weekday/weekly_slot_templates.csv",
-        saved_as="input", cleanup_group="Dades mestres",
+        saved_as="input",
         on_new_session="blank",
         blank_header=CSV_HEADERS["data/weekday/weekly_slot_templates.csv"],
     ),
     SessionFileSpec(
         "data/slot_catalog.csv",
-        saved_as="input", cleanup_group="Dades mestres",
+        saved_as="input",
         on_new_session="blank",
         blank_header=CSV_HEADERS["data/slot_catalog.csv"],
     ),
     SessionFileSpec(
         "data/weekday/wheel_slots.csv",
-        saved_as="input", cleanup_group="Dades mestres",
+        saved_as="input",
         on_new_session="blank",
         blank_header=CSV_HEADERS["data/weekday/wheel_slots.csv"],
     ),
@@ -609,67 +608,6 @@ def restore_session_snapshot(
         shutil.move(str(item), str(session_dir / item.name))
     staging.rmdir()
     return load_session_folder(session_dir, year, month, pdf_output_dir)
-
-
-def session_cleanup_targets(year: int) -> dict[str, list[Path]]:
-    out: dict[str, list[Path]] = {}
-    for spec in _SESSION_FILE_REGISTRY:
-        if spec.cleanup_group is None:
-            continue
-        out.setdefault(spec.cleanup_group, []).append(_spec_path(spec, year))
-    return out
-
-
-def delete_path_if_exists(path: Path) -> int:
-    if path.exists() and path.is_file():
-        path.unlink()
-        return 1
-    if path.exists() and path.is_dir():
-        shutil.rmtree(path)
-        return 1
-    return 0
-
-
-def delete_current_session_workspace(session_dir: Path, year: int, month: int, pdf_output_dir: Path) -> int:
-    paths: list[Path] = []
-    paths.extend(path for path, _ in session_file_pairs(year, month))
-    paths.extend(path for path, _ in dynamic_session_file_pairs(year, pdf_output_dir))
-    for target_group in session_cleanup_targets(year).values():
-        paths.extend(target_group)
-
-    deleted = 0
-    seen: set[str] = set()
-    for relative_path in paths:
-        for path in [relative_path, session_dir / relative_path]:
-            key = str(path)
-            if key in seen:
-                continue
-            seen.add(key)
-            deleted += delete_path_if_exists(path)
-
-    entre_setmana_dir = pdf_output_dir / "entre_setmana"
-    session_exports_dir = session_dir / "exports"
-    for pattern in [
-        f"general_{year}_*.pdf",
-        f"general_calendar_{year}_*.pdf",
-        f"by_professional_{year}_*.pdf",
-        f"metrics_{year}_*.pdf",
-        f"metrics_{year}_*.xlsx",
-        f"individual_calendars_{year}_*",
-    ]:
-        for path in pdf_output_dir.glob(pattern):
-            deleted += delete_path_if_exists(path)
-        # També al subdirectori `entre_setmana/` on viuen els PDF principals
-        # del planning auto-renderitzat des de la pestanya Generar.
-        if entre_setmana_dir.exists():
-            for path in entre_setmana_dir.glob(pattern):
-                deleted += delete_path_if_exists(path)
-        if session_exports_dir.exists():
-            for path in session_exports_dir.glob(pattern):
-                deleted += delete_path_if_exists(path)
-
-    return deleted
-
 
 
 def blank_session_files(year: int) -> dict[str, str]:
