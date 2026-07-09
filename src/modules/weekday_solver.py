@@ -295,6 +295,28 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
     if not granular_fixed.empty:
         preassignments = pd.concat([preassignments, granular_fixed], ignore_index=True)
 
+    # Roda d'assignació (restricció TOVA): torns rotatoris per activitat.
+    # NO es fixa res: el solver segueix el torn amb una penalització alta
+    # si el trenca (mai fa el model infactible). Les preassignacions
+    # existents (usuari / màquines fixes) prevalen: si ja hi ha una fila
+    # per (dia, slot), la roda no hi opina.
+    from src.services.wheel_assignments import expand_wheel_preassignments
+    wheel_rows = expand_wheel_preassignments(
+        calendar_for_solver, common["professionals"],
+        _full_blocked, _franja_blocked,
+    )
+    if not wheel_rows.empty and not preassignments.empty:
+        _taken = {
+            (str(r.day), str(r.slot_id).strip().upper())
+            for r in preassignments.itertuples(index=False)
+        }
+        wheel_rows = wheel_rows[
+            ~wheel_rows.apply(
+                lambda r: (str(r["day"]), str(r["slot_id"]).strip().upper()) in _taken,
+                axis=1,
+            )
+        ]
+
     # Bloqueigs derivats de `allowed_areas` per facultatiu: si XX té
     # allowed_areas="ZONA_A;ZONA_B", afegim allowed=0 a la taula
     # d'eligibility per a tots els slots fora d'aquestes àrees.
@@ -388,6 +410,8 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
         "slot_fixed_assignments": machine_fixed,
         "no_pres_weekday_map": no_pres_weekday_map,
         "pres_weekday_map": pres_weekday_map,
+        # Roda d'assignació: preferències TOVES (dia, slot, franja → prof).
+        "wheel_preferences": wheel_rows,
     }
 
     result_text, schedule_rows, metrics_rows = build_and_solve_demo(

@@ -614,7 +614,8 @@ def _add_review_continuity(model, x, professionals, keys_by_day, slot_rows, work
 
 def _add_flip_target_cap(model, x, pres_flip, quota_hard_professionals, unique_days,
                          unique_weeks, week_map, working_map, absent_days_by_prof,
-                         capacity_pct_by, machine_specs, planning_rules=None):
+                         capacity_pct_by, machine_specs, planning_rules=None,
+                         weekly_pres_targets=None):
     """Hard: els 'flips' (no-presencial ordinari comptat com a presencial)
     NOMÉS poden omplir fins al target presencial setmanal del facultatiu,
     mai per sobre. Els presencials FIXOS forçats per cobertura sí que
@@ -648,7 +649,13 @@ def _add_flip_target_cap(model, x, pres_flip, quota_hard_professionals, unique_d
             if not flip_terms:
                 continue
             eff_days = (sum(capacity_pct_by[(p, d)] for d in active_days) + 99) // 100
-            target = rules.target_presential.get(min(eff_days, 5), 0)
+            if weekly_pres_targets is not None:
+                # Modes automàtics: target PRES per (professional, setmana)
+                # calculat de la càrrega real ({} = modes total/none → 0:
+                # cap flip més enllà de l'over_fixed — les franges manen).
+                target = weekly_pres_targets.get((p, yw), 0)
+            else:
+                target = rules.target_presential.get(min(eff_days, 5), 0)
             n_f = max(1, len(fixed_terms))
             fixed_total = model.NewIntVar(0, n_f, f"flipcap_fixed_{p}_{yw}")
             model.Add(fixed_total == (sum(fixed_terms) if fixed_terms else 0))

@@ -568,12 +568,52 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
         unique_days,
     )
     planning_rules = data.get("planning_rules")
+    # Mode de les regles d'equilibri: el cap dur dels flips segueix el mateix
+    # criteri que els termes setmanals (personalitzat → taula; presencial →
+    # targets automàtics; total/none → 0 flips més enllà de l'over_fixed).
+    _rules_mode = (getattr(planning_rules, "mode", "personalitzat")
+                   or "personalitzat") if planning_rules is not None else "personalitzat"
+    _weekly_pres_targets = None
+    if _rules_mode == "presencial":
+        from src.solver.objectives_targets import weekly_auto_targets
+        _weekly_pres_targets = weekly_auto_targets(
+            "presencial", quota_hard_professionals, unique_days, unique_weeks,
+            week_map, working_map, absent_days_by_prof, capacity_pct_by,
+            machine_specs,
+        )
+    elif _rules_mode in ("total", "none"):
+        _weekly_pres_targets = {}
     _add_flip_target_cap(
         model, x, pres_flip, quota_hard_professionals, unique_days, unique_weeks,
         week_map, working_map, absent_days_by_prof, capacity_pct_by,
         machine_specs, planning_rules=planning_rules,
+        weekly_pres_targets=_weekly_pres_targets,
     )
     presential_tolerance = max(0, int(data.get("presential_tolerance", 0) or 0))
+
+    # ── Roda d'assignació (TOVA): penalitza trencar el torn ────────────────
+    _wheel_df = data.get("wheel_preferences")
+    _wheel_miss_exprs = []
+    if _wheel_df is not None and not getattr(_wheel_df, "empty", True):
+        from src.solver.preprocessing import _matching_preassignment_keys
+        # Normalització simètrica: la clau d'x usa l'id RAW del CSV.
+        _prof_by_norm = {str(p).strip().upper(): p for p in professionals}
+        for _wr in _wheel_df.itertuples(index=False):
+            _wp = _prof_by_norm.get(
+                str(getattr(_wr, "professional_id", "") or "").strip().upper()
+            )
+            if _wp is None:
+                continue
+            for _sk in _matching_preassignment_keys(_wr, slot_keys):
+                if (_wp, _sk) in x:
+                    _wheel_miss_exprs.append(1 - x[_wp, _sk])
+    total_wheel_pref_miss = model.NewIntVar(
+        0, max(1, len(_wheel_miss_exprs)), "total_wheel_pref_miss"
+    )
+    model.Add(
+        total_wheel_pref_miss
+        == (sum(_wheel_miss_exprs) if _wheel_miss_exprs else 0)
+    )
 
     # ── Soft objectives ───────────────────────────────────────────────────────
     # MODEL DE PEONADES (cap-only): el solver crea `pn[p, sk]` per cada
@@ -788,6 +828,8 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
             (cum_tot_l1, W["ordinary_cum_spread_l1"]),
             (cum_tot_linf, W["ordinary_cum_spread_max"]),
             (total_stability_changes, W["stability"]),
+            # Roda d'assignació: seguir el torn rotatori (tova).
+            (total_wheel_pref_miss, W["wheel_preference"]),
             (total_comite_pref_miss, W["comite_preferred_machine"]),
             (total_guard_morning_miss, W["guard_morning_telework"]),
             # TLD comodí: amb el tier 2 (NP target) ja bloquejat amb

@@ -21,13 +21,24 @@ import pandas as pd
 _DEFAULT_TARGET_MACHINES = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 _DEFAULT_TARGET_PRESENTIAL = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 
-_CSV_COLUMNS = ["active_days", "target_machines", "target_presential"]
+_CSV_COLUMNS = ["active_days", "target_machines", "target_presential", "mode"]
+
+# Modes d'equilibri setmanal:
+#   personalitzat — la taula manual per mida de setmana (comportament clàssic).
+#   presencial    — target setmanal AUTOMÀTIC: la càrrega PRESENCIAL real de
+#                   cada setmana es reparteix proporcionalment a la jornada.
+#   total         — target setmanal AUTOMÀTIC sobre el TOTAL de màquines
+#                   (PRES+NP junts; la barreja la determinen les franges).
+#   none          — sense regles d'equilibri setmanal (només l'equitat mensual).
+RULE_MODES = ("personalitzat", "presencial", "total", "none")
 
 
 @dataclass
 class PlanningRules:
     target_machines: dict[int, int] = field(default_factory=lambda: dict(_DEFAULT_TARGET_MACHINES))
     target_presential: dict[int, int] = field(default_factory=lambda: dict(_DEFAULT_TARGET_PRESENTIAL))
+    # Per defecte: equilibrar per càrrega de feina TOTAL setmanal.
+    mode: str = "total"
 
     # ── serialisation ──────────────────────────────────────────────────────────
 
@@ -37,6 +48,7 @@ class PlanningRules:
                 "active_days": days,
                 "target_machines": self.target_machines.get(days, 0),
                 "target_presential": self.target_presential.get(days, 0),
+                "mode": self.mode,
             }
             for days in range(1, 6)
         ]
@@ -72,7 +84,18 @@ class PlanningRules:
             target_machines = dict(_DEFAULT_TARGET_MACHINES)
         if not target_presential:
             target_presential = dict(_DEFAULT_TARGET_PRESENTIAL)
-        return cls(target_machines=target_machines, target_presential=target_presential)
+        # Mode: CSVs sense columna o amb valor invàlid → el per defecte
+        # («total», equilibrar per càrrega de feina setmanal).
+        mode = "total"
+        if "mode" in df.columns and not df["mode"].dropna().empty:
+            candidate = str(df["mode"].dropna().iloc[0]).strip().lower()
+            if candidate in RULE_MODES:
+                mode = candidate
+        return cls(
+            target_machines=target_machines,
+            target_presential=target_presential,
+            mode=mode,
+        )
 
     def to_csv(self, path: Path) -> None:
         path = Path(path)

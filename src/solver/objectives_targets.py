@@ -110,6 +110,55 @@ def _add_peonada_monthly_cap(model, x, professionals, slot_keys,
     return peonada_vars, total_short
 
 
+def weekly_auto_targets(kind, quota_hard_professionals, unique_days, unique_weeks,
+                        week_map, working_map, absent_days_by_prof,
+                        capacity_pct_by, machine_specs):
+    """Targets setmanals AUTOMÀTICS per als modes «presencial» i «total»:
+    per cada setmana, la càrrega REAL (nombre de màquines-grup d'aquella
+    setmana — PRESENCIALS si kind='presencial', totes si kind='total')
+    es reparteix entre els facultatius actius proporcionalment a la seva
+    capacitat aquella setmana. Retorna {(professional, setmana): target}."""
+    from src.solver.objectives_balance import _apportion_by_capacity
+
+    days_by_week: dict = {}
+    for d in unique_days:
+        days_by_week.setdefault(week_map[d], []).append(d)
+
+    # Càrrega per dia (independent del professional): grups vinculats
+    # compten 1; per a 'presencial', un grup compta si té algun membre PRES.
+    load_by_day: dict[str, int] = {}
+    for day, spec in (machine_specs or {}).items():
+        coupling_groups, machine_keys, presential_keys, _flip = spec
+        if kind == "presencial":
+            n_groups = sum(
+                1 for g in coupling_groups
+                if any(str(sk[3]).upper() == "PRESENCIAL" for sk in g)
+            )
+            load_by_day[day] = n_groups + len(presential_keys)
+        else:
+            load_by_day[day] = len(coupling_groups) + len(machine_keys)
+
+    out: dict = {}
+    for yw in unique_weeks:
+        week_days = [
+            d for d in days_by_week.get(yw, []) if working_map.get(d, 1) == 1
+        ]
+        load = sum(load_by_day.get(d, 0) for d in week_days)
+        if load <= 0:
+            continue
+        week_capacity: dict = {}
+        for p in quota_hard_professionals:
+            active = [d for d in week_days if d not in absent_days_by_prof[p]]
+            cap = sum(capacity_pct_by[(p, d)] for d in active)
+            if cap > 0:
+                week_capacity[p] = cap
+        actius = sorted(week_capacity)
+        targets = _apportion_by_capacity(load, actius, week_capacity)
+        for p, t in targets.items():
+            out[(p, yw)] = t
+    return out
+
+
 def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, unique_weeks,
                            week_map, working_map, absent_days_by_prof, keys_by_day,
                            capacity_pct_by, review_slots, planning_rules=None,
@@ -134,6 +183,32 @@ def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, uniq
     """
     rules = planning_rules if planning_rules is not None else PlanningRules.defaults()
     specs = machine_specs if machine_specs is not None else _build_machine_term_specs(keys_by_day, review_slots)
+    mode = getattr(rules, "mode", "personalitzat") or "personalitzat"
+
+    def _zero(name):
+        v = model.NewIntVar(0, 1, name)
+        model.Add(v == 0)
+        return v
+
+    # Mode «none»: sense regles d'equilibri setmanal — retorna termes nuls
+    # (l'equitat mensual dels trams 3-4 segueix activa).
+    if mode == "none":
+        return (
+            _zero("total_weekly_presential_shortfall"),
+            _zero("total_weekly_presential_overage"),
+            _zero("total_weekly_np_ord_shortfall"),
+            _zero("total_weekly_np_ord_overage"),
+        )
+
+    # Modes automàtics: target per (professional, setmana) derivat de la
+    # càrrega real de la setmana (les franges manen; cap taula manual).
+    auto_targets: dict = {}
+    if mode in ("presencial", "total"):
+        auto_targets = weekly_auto_targets(
+            mode, quota_hard_professionals, unique_days, unique_weeks,
+            week_map, working_map, absent_days_by_prof, capacity_pct_by,
+            specs,
+        )
 
     pres_shortfall_terms: list = []
     pres_overage_terms: list = []
@@ -188,13 +263,41 @@ def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, uniq
             ]
 
             key = min(eff_days, 5)
-            target_total = rules.target_machines.get(key, 0)
-            target_pres = rules.target_presential.get(key, 0)
-            target_np_ord = max(0, target_total - target_pres)
+            if mode == "presencial":
+                # AUTO: només es fixa el PRES setmanal (repartiment de la
+                # càrrega presencial real); l'NP queda per a l'equitat.
+                target_pres = auto_targets.get((p, yw), 0)
+                target_total = 0
+                target_np_ord = 0
+            elif mode == "total":
+                # AUTO: es fixa el TOTAL setmanal; la barreja PRES/NP la
+                # determinen les franges (cap target presencial propi).
+                target_pres = 0
+                target_total = auto_targets.get((p, yw), 0)
+                target_np_ord = 0
+            else:  # personalitzat (taula manual)
+                target_total = rules.target_machines.get(key, 0)
+                target_pres = rules.target_presential.get(key, 0)
+                target_np_ord = max(0, target_total - target_pres)
+
+            # ── Mode «total»: un únic parell shortfall/overage sobre el
+            # TOTAL de màquines de la setmana (va al tram 1 via les llistes
+            # PRES; el tram 2 queda buit). ──
+            if mode == "total":
+                tot_short = model.NewIntVar(0, n_m, f"weekly_tot_short_{p}_{yw}")
+                model.Add(tot_short >= target_total - total_m - presential_tolerance)
+                model.Add(tot_short >= 0)
+                pres_shortfall_terms.append(tot_short)
+                tot_over = model.NewIntVar(0, n_m, f"weekly_tot_over_{p}_{yw}")
+                model.Add(tot_over >= total_m - target_total - presential_tolerance)
+                model.Add(tot_over >= 0)
+                pres_overage_terms.append(tot_over)
+                continue
 
             # ── PRES: shortfall + overage (target = MÍNIM i MÀXIM exacte) ──
             # La tolerància ε s'aplica simètricament: penalitzem només si
-            # |PRES_count − target_pres| > ε.
+            # |PRES_count − target_pres| > ε. (Mode «total»: mai s'hi arriba
+            # — el continue de dalt; mode «presencial»: target automàtic.)
             if target_pres > 0 or presential_terms:
                 pres_short = model.NewIntVar(0, n_p, f"weekly_pres_short_{p}_{yw}")
                 model.Add(pres_short >= target_pres - total_pres - presential_tolerance)
@@ -219,7 +322,10 @@ def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, uniq
             #   · OVERAGE es mesura sobre np_ord: l'excés d'activitat NP
             #     ORDINÀRIA (per sobre del target) s'ha de pagar com a peonada,
             #     que en reduir np_ord fa baixar l'overage.
-            if target_np_ord > 0 or machine_terms:
+            # Mode «presencial»: l'NP setmanal NO es fixa (queda per a
+            # l'equitat mensual) — sense aquest guard, el target 0
+            # penalitzaria TOTES les NP de la setmana.
+            if mode == "personalitzat" and (target_np_ord > 0 or machine_terms):
                 np_incl = model.NewIntVar(0, n_m, f"weekly_np_incl_{p}_{yw}")
                 model.Add(np_incl == total_m - total_pres)
                 np_ord = model.NewIntVar(-n_m, n_m, f"weekly_np_ord_{p}_{yw}")

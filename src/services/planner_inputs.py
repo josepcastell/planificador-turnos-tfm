@@ -18,6 +18,8 @@ WEEKDAY_TEMPLATE_COLUMNS = [
     "is_active",
     "doubled",
     "linked_to",
+    "week_interval",
+    "week_offset",
 ]
 
 

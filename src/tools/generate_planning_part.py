@@ -241,8 +241,22 @@ def generate_weekday(
     initial: bool = False,
     keep_restriction: str | None = None,
     warm_start: bool = False,
+    force_rules_mode: str | None = None,
+    schedule_out: str = "outputs/schedule_weekday.csv",
+    metrics_out: str = "outputs/metrics_weekday.csv",
 ) -> None:
     common = load_common_data("data")
+    if force_rules_mode is not None:
+        # Passada BASE del flux de proposta: es generen les franges tal com
+        # estan definides, amb les regles d'equilibri en el mode indicat
+        # (normalment "none").
+        from src.domain.planning_rules import PlanningRules
+        _r = common.get("planning_rules") or PlanningRules.defaults()
+        common["planning_rules"] = PlanningRules(
+            target_machines=dict(_r.target_machines),
+            target_presential=dict(_r.target_presential),
+            mode=force_rules_mode,
+        )
     existing_schedule = _read_csv_if_exists(Path("outputs/schedule_weekday.csv"))
     existing_metrics = _read_csv_if_exists(Path("outputs/metrics_weekday.csv"))
     review_slots = common.get("review_slots") or set()
@@ -317,7 +331,7 @@ def generate_weekday(
 
     _write_combined(
         schedule_frames,
-        "outputs/schedule_weekday.csv",
+        schedule_out,
         existing_schedule,
         year,
         start_month,
@@ -331,8 +345,8 @@ def generate_weekday(
     )
     metric_output_frames = [frame for frame in [preserved_metrics, *metrics_frames] if not frame.empty]
     if metric_output_frames:
-        pd.concat(metric_output_frames, ignore_index=True).to_csv("outputs/metrics_weekday.csv", index=False)
-    print("Planning laborable generat a outputs/schedule_weekday.csv")
+        pd.concat(metric_output_frames, ignore_index=True).to_csv(metrics_out, index=False)
+    print(f"Planning laborable generat a {schedule_out}")
 
 
 def parse_args():
@@ -378,10 +392,53 @@ if __name__ == "__main__":
     args = parse_args()
     if args.max_seconds is not None and args.max_seconds > 0:
         os.environ["PAC3_SOLVER_MAX_SECONDS"] = str(args.max_seconds)
-    generate_weekday(
-        args.year, args.start_month, args.end_month,
-        stability_from=args.stability_from,
-        initial=args.initial,
-        keep_restriction=args.keep_restriction,
-        warm_start=args.warm_start,
+    # FLUX DE PROPOSTA (regles d'equilibri amb acceptació de l'usuari):
+    # quan hi ha un mode d'equilibri actiu i és una generació completa (no
+    # un reajust amb --stability-from ni un --keep-restriction), es fan
+    # DUES passades:
+    #   1) BASE  — sense regles d'equilibri (les franges manen) → outputs/.
+    #   2) PROPOSTA — amb les regles actives, ancorada a la base (stability)
+    #      perquè els canvis siguin els MÍNIMS → *_proposta.csv.
+    # La UI mostra la diferència i l'usuari decideix si l'aplica.
+    from src.domain.planning_rules import PlanningRules as _PR
+    _rules_mode = _PR.from_csv(Path("data/planning_rules.csv")).mode
+    _two_pass = (
+        _rules_mode != "none"
+        and not args.stability_from
+        and not args.keep_restriction
     )
+    if _two_pass:
+        print("[Proposta] Passada 1/2: BASE segons les franges (sense regles d'equilibri)")
+        generate_weekday(
+            args.year, args.start_month, args.end_month,
+            stability_from=None,
+            initial=args.initial,
+            keep_restriction=None,
+            warm_start=args.warm_start,
+            force_rules_mode="none",
+        )
+        print("[Proposta] Passada 2/2: PROPOSTA amb regles d'equilibri (mode "
+              f"{_rules_mode}), canvis mínims sobre la base")
+        generate_weekday(
+            args.year, args.start_month, args.end_month,
+            stability_from="outputs/schedule_weekday.csv",
+            initial=args.initial,
+            keep_restriction=None,
+            warm_start=False,
+            schedule_out="outputs/schedule_weekday_proposta.csv",
+            metrics_out="outputs/metrics_weekday_proposta.csv",
+        )
+        print("[Proposta] Llesta: revisa i accepta els canvis a la pestanya Calendari.")
+    else:
+        # Sense flux de proposta (mode none / reajust): elimina propostes
+        # antigues perquè el panell no oferís aplicar un diff OBSOLET sobre
+        # el calendari que estem a punt de renovar.
+        Path("outputs/schedule_weekday_proposta.csv").unlink(missing_ok=True)
+        Path("outputs/metrics_weekday_proposta.csv").unlink(missing_ok=True)
+        generate_weekday(
+            args.year, args.start_month, args.end_month,
+            stability_from=args.stability_from,
+            initial=args.initial,
+            keep_restriction=args.keep_restriction,
+            warm_start=args.warm_start,
+        )

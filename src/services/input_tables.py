@@ -396,6 +396,14 @@ def save_weekly_slot_templates(df: pd.DataFrame, templates_path: Path) -> None:
     out["work_mode"] = out["work_mode"].fillna("NORMAL").astype(str).str.strip().str.upper()
     out["required_staff"] = pd.to_numeric(out["required_staff"], errors="coerce").fillna(1).astype(int).clip(lower=1, upper=6)
     out["is_active"] = pd.to_numeric(out["is_active"], errors="coerce").fillna(1).astype(int).clip(0, 1)
+    # Alternança setmanal: cada N setmanes (1 = totes) + quina setmana del
+    # cicle (offset segons setmana ISO % interval).
+    if "week_interval" not in out.columns:
+        out["week_interval"] = 1
+    if "week_offset" not in out.columns:
+        out["week_offset"] = 0
+    out["week_interval"] = pd.to_numeric(out["week_interval"], errors="coerce").fillna(1).astype(int).clip(1, 4)
+    out["week_offset"] = pd.to_numeric(out["week_offset"], errors="coerce").fillna(0).astype(int).clip(0, 3)
     out["doubled"] = pd.to_numeric(out["doubled"], errors="coerce").fillna(0).astype(int).clip(0, 1)
     out["linked_to"] = out["linked_to"].fillna("").astype(str).str.strip().str.upper()
 
@@ -435,5 +443,6 @@ def save_weekly_slot_templates(df: pd.DataFrame, templates_path: Path) -> None:
         templates_path,
         out,
         ["weekday_name", "franja", "slot_id", "presentiality", "work_mode",
-         "required_staff", "is_active", "doubled", "linked_to"],
+         "required_staff", "is_active", "doubled", "linked_to",
+         "week_interval", "week_offset"],
     )

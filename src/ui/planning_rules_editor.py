@@ -71,12 +71,55 @@ def _rules_from_dataframe(df: pd.DataFrame) -> PlanningRules:
     )
 
 
+_MODE_LABELS = {
+    "none": "No equilibrar",
+    "presencial": "Equilibrar per càrrega presencial setmanal",
+    "total": "Equilibrar per càrrega total setmanal",
+    "personalitzat": "Personalitzar (taula per tipus de setmana)",
+}
+_MODE_ORDER = ["none", "presencial", "total", "personalitzat"]
+_MODE_HELP = {
+    "none": "El solver segueix NOMÉS les franges i l'equitat mensual entre "
+            "facultatius. Cap objectiu setmanal.",
+    "presencial": "Cada setmana, la càrrega PRESENCIAL real es reparteix "
+                  "automàticament entre els facultatius actius, proporcional "
+                  "a la jornada. Les no presencials queden lliures (l'equitat "
+                  "mensual ja les equilibra).",
+    "total": "Cada setmana, el TOTAL de màquines es reparteix automàticament "
+             "(presencials i no presencials juntes; la barreja la determinen "
+             "les franges).",
+    "personalitzat": "Tu fixes els dies presencials i no presencials per "
+                     "tipus de setmana (comportament clàssic).",
+}
+
+
 def render_planning_rules_editor(rules_path: Path = _RULES_PATH) -> PlanningRules:
     """Render the weekly target rules editor. Returns current PlanningRules."""
     rules_path = Path(rules_path)
     rules = _load_rules(rules_path)
 
-    st.caption(
+    mode_choice = st.selectbox(
+        "Mode d'equilibri setmanal",
+        _MODE_ORDER,
+        index=_MODE_ORDER.index(rules.mode) if rules.mode in _MODE_ORDER else 2,
+        format_func=lambda m: _MODE_LABELS[m],
+        key="planning_rules_mode",
+        help="Per defecte: equilibrar per càrrega total setmanal. En "
+             "generar, si hi ha un mode actiu, veuràs els canvis que les "
+             "regles volen fer sobre el calendari de les franges i els "
+             "hauràs d'acceptar o descartar.",
+    )
+    st.caption(_MODE_HELP[mode_choice])
+    if mode_choice != rules.mode:
+        rules.mode = mode_choice
+        rules.to_csv(rules_path)
+        st.toast(f"Mode d'equilibri: {_MODE_LABELS[mode_choice]}", icon="⚖️")
+
+    if mode_choice != "personalitzat":
+        return rules
+
+    _pers = st.expander("Personalitzar la taula setmanal", expanded=True)
+    _pers.caption(
         "Per a cada tipus de setmana (segons dies laborables), defineix "
         "el nombre objectiu de dies presencials i de dies no presencials. "
         "El solver intentarà fer-la complir per a tots els facultatius."
@@ -96,7 +139,7 @@ def render_planning_rules_editor(rules_path: Path = _RULES_PATH) -> PlanningRule
         f"planning_rules|{rules_path.resolve()}",
     )
 
-    edited = st.data_editor(
+    edited = _pers.data_editor(
         editor_df,
         num_rows="fixed",
         hide_index=True,

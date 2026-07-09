@@ -105,6 +105,8 @@ def add_work_slot_template(
     work_mode: str,
     required_staff: int = 1,
     doubled: int = 0,
+    week_interval: int = 1,
+    week_offset: int = 0,
 ) -> pd.DataFrame:
     """Afegeix una fila al template. Si ja existeix una fila idèntica a
     la clau (weekday, franja, slot, presencialitat, work_mode),
@@ -126,12 +128,18 @@ def add_work_slot_template(
         & (df["presentiality"].astype(str) == str(presentiality))
         & (df["work_mode"].astype(str) == str(work_mode))
     )
+    if "week_interval" not in df.columns:
+        df["week_interval"] = 1
+    if "week_offset" not in df.columns:
+        df["week_offset"] = 0
     if mask.any():
         current = pd.to_numeric(
             df.loc[mask, "required_staff"], errors="coerce"
         ).fillna(1).astype(int)
         df.loc[mask, "required_staff"] = current + max(1, int(required_staff))
         df.loc[mask, "is_active"] = 1
+        df.loc[mask, "week_interval"] = max(1, int(week_interval))
+        df.loc[mask, "week_offset"] = max(0, int(week_offset))
         return df.reset_index(drop=True)
     new_row = {
         "weekday_name": weekday_name,
@@ -142,6 +150,8 @@ def add_work_slot_template(
         "required_staff": max(1, int(required_staff)),
         "is_active": 1,
         "doubled": int(bool(doubled)),
+        "week_interval": max(1, int(week_interval)),
+        "week_offset": max(0, int(week_offset)),
     }
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     return df.reset_index(drop=True)

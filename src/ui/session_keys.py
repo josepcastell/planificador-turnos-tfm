@@ -43,6 +43,7 @@ RESTRICCIONS: tuple[str, ...] = (
     "selected_punctual_work_slot_cell",
     "planning_rules_draft",
     "planning_rules_editor_nonce",
+    "planning_rules_mode",
 )
 
 # ── Generar i revisar ─────────────────────────────────────────────────────

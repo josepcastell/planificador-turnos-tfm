@@ -159,6 +159,12 @@ _SESSION_FILE_REGISTRY: list[SessionFileSpec] = [
         on_new_session="blank",
         blank_header=CSV_HEADERS["data/slot_catalog.csv"],
     ),
+    SessionFileSpec(
+        "data/weekday/wheel_slots.csv",
+        saved_as="input", cleanup_group="Dades mestres",
+        on_new_session="blank",
+        blank_header=CSV_HEADERS["data/weekday/wheel_slots.csv"],
+    ),
 ]
 
 

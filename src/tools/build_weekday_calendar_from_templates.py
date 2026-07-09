@@ -134,10 +134,31 @@ def build_weekday_calendar_from_templates(
     else:
         templates["required_staff"] = 1
 
+    # Alternança setmanal («1 de cada N»): cicle sobre la setmana ISO.
+    if "week_interval" not in templates.columns:
+        templates["week_interval"] = 1
+    if "week_offset" not in templates.columns:
+        templates["week_offset"] = 0
+    templates["week_interval"] = (
+        pd.to_numeric(templates["week_interval"], errors="coerce")
+        .fillna(1).astype(int).clip(1, 4)
+    )
+    templates["week_offset"] = (
+        pd.to_numeric(templates["week_offset"], errors="coerce")
+        .fillna(0).astype(int).clip(0, 3)
+    )
+
     rows = []
     for row in base.itertuples(index=False):
+        _iso_week = int(row.day.isocalendar()[1])
         tpl = templates[templates["weekday_name"] == row.weekday_name]
         for t in tpl.itertuples(index=False):
+            # Salta les setmanes fora del cicle. NOTA: el cicle segueix la
+            # setmana ISO; al canvi d'any (52→1) pot coincidir dues setmanes
+            # seguides o saltar-ne una — inherent al patró.
+            _interval = int(getattr(t, "week_interval", 1) or 1)
+            if _interval > 1 and (_iso_week % _interval) != int(getattr(t, "week_offset", 0) or 0):
+                continue
             # Expandeix `required_staff` instàncies per a aquesta plantilla:
             # cada instància obté una `position` incremental dins del mateix
             # (day, franja, slot, pres, wm) — el solver les distingeix com

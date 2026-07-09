@@ -288,6 +288,73 @@ def has_undo_available() -> bool:
     return prev_path.exists() and prev_path.stat().st_size > 0
 
 
+def _render_balance_proposal_panel(
+    weekday_schedule_path,
+    professionals_path,
+    pdf_output_dir,
+    year,
+    selected_months,
+    session_dir,
+    month,
+    save_generated_session_folder,
+) -> None:
+    """Panell d'ACCEPTACIÓ de les regles d'equilibri: quan hi ha un mode
+    actiu, «Generar» deixa el calendari BASE (segons les franges) com a
+    actiu i una PROPOSTA amb l'equilibri aplicat. Aquí es mostren els
+    canvis exactes i l'usuari decideix si s'apliquen o no."""
+    from src.services import balance_proposal as bp
+
+    if not bp.proposal_exists():
+        return
+    diff = bp.load_proposal_diff()
+    with st.container(border=True):
+        st.markdown("#### ⚖️ Regles d'equilibri: proposta de canvis")
+        if diff.empty:
+            st.success(
+                "Les regles d'equilibri no canvien res: el calendari generat "
+                "segons les franges ja compleix l'equilibri triat."
+            )
+            if st.button("Entesos", key="bp_ack", width="stretch"):
+                bp.discard_proposal()
+                st.rerun()
+            return
+        st.caption(
+            f"Per complir les regles d'equilibri caldria fer **{len(diff)} "
+            "canvi(s)** sobre el calendari generat segons les franges. "
+            "Revisa'ls i decideix:"
+        )
+        st.dataframe(
+            diff,
+            hide_index=True,
+            width="stretch",
+            height=min(330, 60 + 35 * len(diff)),
+        )
+        col_apply, col_keep = st.columns(2)
+        if col_apply.button(
+            f"✅ Aplicar l'equilibri ({len(diff)} canvis)",
+            type="primary", width="stretch", key="bp_apply",
+        ):
+            n = bp.apply_proposal()
+            export_general_weekday_pdf(
+                weekday_schedule_path, professionals_path, pdf_output_dir,
+                year, selected_months,
+            )
+            save_generated_session_folder(session_dir, year, month)
+            st.session_state.pop("weekday_live_schedule", None)
+            st.toast(f"Equilibri aplicat: {n} canvis", icon="✅")
+            st.rerun()
+        if col_keep.button(
+            "✋ Mantenir el calendari segons les franges",
+            width="stretch", key="bp_discard",
+        ):
+            bp.discard_proposal()
+            st.toast(
+                "Proposta descartada: es manté el calendari de les franges",
+                icon="🗂️",
+            )
+            st.rerun()
+
+
 def render_weekday_planning_tab(
     year: int,
     month: int,
@@ -473,6 +540,12 @@ def render_weekday_planning_tab(
             )
 
     st.divider()
+    # Proposta de les regles d'equilibri pendent d'acceptar (si n'hi ha).
+    _render_balance_proposal_panel(
+        weekday_schedule_path, professionals_path, pdf_output_dir,
+        year, selected_months, session_dir, month,
+        save_generated_session_folder,
+    )
     # El PDF renderitzat es mostra a sota. L'edició d'assignacions s'ha mogut
     # a la pestanya "Mètriques i canvis".
     calendar_container = st.container()

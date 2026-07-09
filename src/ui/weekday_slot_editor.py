@@ -36,6 +36,68 @@ FRANJA_OPTIONS = list(FRANJA_LABELS)
 _DEFAULT_WORK_MODE = "NORMAL"
 
 
+_FREQ_LABELS = {
+    1: "Cada setmana",
+    2: "1 de cada 2 setmanes",
+    3: "1 de cada 3 setmanes",
+    4: "1 de cada 4 setmanes",
+}
+
+
+def _freq_offset_labels(interval: int, year: int, weekday_name: str) -> dict[int, str]:
+    """Per a «1 de cada N»: etiqueta cada opció del cicle amb dates
+    d'exemple reals de l'any, perquè l'usuari triï QUINES setmanes."""
+    import datetime as _dt
+    if interval <= 1:
+        return {0: ""}
+    wd_idx = (
+        WEEKDAY_TEMPLATE_COLUMNS.index(weekday_name)
+        if weekday_name in WEEKDAY_TEMPLATE_COLUMNS else 0
+    )
+    out: dict[int, str] = {}
+    for off in range(interval):
+        examples = []
+        d = _dt.date(year, 1, 1)
+        while d.weekday() != wd_idx:
+            d += _dt.timedelta(days=1)
+        while len(examples) < 3 and d.year == year:
+            if d.isocalendar()[1] % interval == off:
+                examples.append(d.strftime("%d/%m"))
+            d += _dt.timedelta(days=7)
+        out[off] = "setmanes del " + ", ".join(examples) + "…"
+    return out
+
+
+def _render_freq_selectors(year: int, weekday_name: str, key_prefix: str,
+                           current_interval: int = 1, current_offset: int = 0):
+    """Selectors «Freqüència» + «Quines setmanes». Retorna (interval, offset)."""
+    col_freq, col_off = st.columns(2)
+    with col_freq:
+        interval = st.selectbox(
+            "Freqüència",
+            options=list(_FREQ_LABELS),
+            index=list(_FREQ_LABELS).index(
+                current_interval if current_interval in _FREQ_LABELS else 1
+            ),
+            format_func=lambda v: _FREQ_LABELS[v],
+            key=f"{key_prefix}_freq",
+            help="«1 de cada N»: la franja només existeix les setmanes "
+                 "triades del cicle (setmana ISO). Cada setmana = sempre.",
+        )
+    offset = 0
+    if interval > 1:
+        labels = _freq_offset_labels(interval, year, weekday_name)
+        with col_off:
+            offset = st.selectbox(
+                "Quines setmanes",
+                options=list(labels),
+                index=min(current_offset, interval - 1),
+                format_func=lambda v: labels[v],
+                key=f"{key_prefix}_freqoff",
+            )
+    return int(interval), int(offset)
+
+
 def _edit_suffix(values: dict[str, object], parts: list[str]) -> str:
     return "_".join(str(values.get(part, "")).replace(" ", "_").replace("-", "_") for part in parts)
 
@@ -72,12 +134,14 @@ def render_weekday_work_slot_editor(
         existing_slots,
         weekly_templates_path,
         invalidate_after_work_slot_change,
+        year,
     )
     _render_selected_fixed_cell_editor(
         templates_df,
         existing_slots,
         weekly_templates_path,
         invalidate_after_work_slot_change,
+        year,
     )
     _render_fixed_weekly_calendar(templates_df, default_required)
     _render_linked_groups_editor(
@@ -175,6 +239,7 @@ def _render_selected_fixed_slot_editor(
     existing_slots: list[str],
     weekly_templates_path: Path,
     invalidate_after_work_slot_change: Callable[[], None],
+    year: int = 2026,
 ) -> None:
     selected_fixed_edit = st.session_state.get("selected_fixed_work_slot_edit")
     if not selected_fixed_edit:
@@ -271,6 +336,26 @@ def _render_selected_fixed_slot_editor(
     edited_fixed_work_mode = _DEFAULT_WORK_MODE
     edited_fixed_required_staff = 1
 
+    # Freqüència actual de la fila seleccionada (prefill del selector).
+    _fmask = (
+        (templates_df["weekday_name"].astype(str) == str(selected_fixed_edit["weekday_name"]))
+        & (templates_df["franja"].astype(str) == str(selected_fixed_edit["franja"]))
+        & (templates_df["slot_id"].astype(str).str.strip().str.upper()
+           == str(selected_fixed_edit["slot_id"]).strip().upper())
+    )
+    _cur_int, _cur_off = 1, 0
+    if "week_interval" in templates_df.columns and _fmask.any():
+        _cur_int = int(pd.to_numeric(
+            templates_df.loc[_fmask, "week_interval"], errors="coerce"
+        ).fillna(1).iloc[0])
+        _cur_off = int(pd.to_numeric(
+            templates_df.loc[_fmask, "week_offset"], errors="coerce"
+        ).fillna(0).iloc[0]) if "week_offset" in templates_df.columns else 0
+    edited_interval, edited_offset = _render_freq_selectors(
+        year, edited_fixed_weekday, f"fixed_edit_freq_{edit_suffix}",
+        current_interval=_cur_int, current_offset=_cur_off,
+    )
+
     edit_actions = st.columns(3)
     with edit_actions[0]:
         if st.button(
@@ -296,6 +381,8 @@ def _render_selected_fixed_slot_editor(
                 edited_fixed_work_mode,
                 int(edited_fixed_required_staff),
                 doubled=0,
+                week_interval=edited_interval,
+                week_offset=edited_offset,
             )
             # Gestió del checkbox Doblar:
             #  - Si marcat → garantim que existeix també la sibling de
@@ -326,6 +413,8 @@ def _render_selected_fixed_slot_editor(
                         edited_fixed_work_mode,
                         int(edited_fixed_required_staff),
                         doubled=0,
+                        week_interval=edited_interval,
+                        week_offset=edited_offset,
                     )
             else:
                 templates_df = remove_work_slot_template(
@@ -509,6 +598,7 @@ def _render_selected_fixed_cell_editor(
     existing_slots: list[str],
     weekly_templates_path: Path,
     invalidate_after_work_slot_change: Callable[[], None],
+    year: int = 2026,
 ) -> None:
     selected_fixed_cell = st.session_state.get("selected_fixed_work_slot_cell")
     if not selected_fixed_cell:
@@ -524,6 +614,9 @@ def _render_selected_fixed_cell_editor(
         "NO_PRESENCIAL i queda **vinculada** a la principal (el mateix "
         "facultatiu cobreix les dues). Si tries **Doblar**, el slot "
         "principal apareix dues vegades (PRES + NP, dos facultatius)."
+    )
+    add_interval, add_offset = _render_freq_selectors(
+        year, selected_fixed_cell["weekday_name"], "fixed_add",
     )
     add_col1, add_col2, add_col3, add_col4 = st.columns([1.4, 1.4, 0.7, 0.8])
     with add_col1:
@@ -587,6 +680,8 @@ def _render_selected_fixed_cell_editor(
                 "PRESENCIAL",
                 _DEFAULT_WORK_MODE,
                 doubled=0,
+                week_interval=add_interval,
+                week_offset=add_offset,
             )
             if bool(doubled_choice):
                 # DOBLAR: afegim també la NP del mateix slot.
@@ -598,6 +693,8 @@ def _render_selected_fixed_cell_editor(
                     "NO_PRESENCIAL",
                     _DEFAULT_WORK_MODE,
                     doubled=0,
+                    week_interval=add_interval,
+                    week_offset=add_offset,
                 )
             if _new_link:
                 # VINCULAR amb secundària: afegim el secundari com a NP
@@ -610,6 +707,8 @@ def _render_selected_fixed_cell_editor(
                     "NO_PRESENCIAL",
                     _DEFAULT_WORK_MODE,
                     doubled=0,
+                    week_interval=add_interval,
+                    week_offset=add_offset,
                 )
                 templates_df = _save_linked_to_in_template(
                     templates_df,

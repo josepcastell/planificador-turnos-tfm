@@ -83,15 +83,19 @@ render_update_panel(Path(__file__).resolve().parent)
 
 # Tancar el programa de forma neta (atura el servidor). Així no cal cap
 # finestra de terminal per aturar-lo: s'obre sense finestra i es tanca des d'aquí.
-with st.sidebar.expander("⏻ Tancar el programa", expanded=False):
-    st.caption("Atura el programa. Després ja pots tancar la pestanya del navegador.")
-    if st.button("Tancar ara", key="app_exit_btn", width="stretch"):
-        # NO aturem aquí: deixem que el run continuï fins al final perquè
-        # els autosaves dels editors d'aquest mateix rerun (l'última edició
-        # de l'usuari) s'apliquin abans d'apagar. El tancament real es fa
-        # al FINAL d'app.py.
-        st.session_state["_app_exit_requested"] = True
-        st.success("Desant i aturant el programa…")
+if st.sidebar.button(
+    "⏻ Tancar el programa",
+    key="app_exit_btn",
+    width="stretch",
+    help="Desa i atura el programa. Després ja pots tancar la pestanya "
+         "del navegador.",
+):
+    # NO aturem aquí: deixem que el run continuï fins al final perquè
+    # els autosaves dels editors d'aquest mateix rerun (l'última edició
+    # de l'usuari) s'apliquin abans d'apagar. El tancament real es fa
+    # al FINAL d'app.py.
+    st.session_state["_app_exit_requested"] = True
+    st.sidebar.success("Desant i aturant el programa…")
 
 DEFAULT_YEAR = 2026
 DEFAULT_MONTH = 1
@@ -250,11 +254,17 @@ def delete_current_session_workspace(session_dir: Path, year: int, month: int) -
     return session_store.delete_current_session_workspace(session_dir, year, month, PDF_OUTPUT_DIR)
 
 
-def create_empty_session_folder(session_dir: Path, year: int, carry_forward_source: Path | None = None) -> None:
+def create_empty_session_folder(
+    session_dir: Path,
+    year: int,
+    carry_forward_source: Path | None = None,
+    section_name: str | None = None,
+) -> None:
     session_store.create_empty_session_folder(
         session_dir,
         year,
-        st.session_state.get("section_name_for_manifest", ""),
+        (section_name if section_name is not None
+         else st.session_state.get("section_name_for_manifest", "")),
         CARRY_FORWARD_SESSION_FILES,
         carry_forward_source=carry_forward_source,
     )
@@ -305,6 +315,8 @@ if _pending_section is not None:
 section_name = st.sidebar.text_input(
     "Títol del calendari",
     key="section_name_for_manifest",
+    help="Canviar el títol REANOMENA la sessió actual (no en crea cap de "
+         "nova). Per començar una sessió nova, fes servir «➕ Nova sessió».",
 )
 year = st.sidebar.number_input("Any", min_value=2020, max_value=2100, value=initial_year, step=1)
 safe_section_name = "".join(
@@ -332,6 +344,63 @@ if st.session_state.get("no_active_session"):
             "calendari** (sidebar) i prem Enter per crear-ne una de nova."
         )
         st.stop()
+
+# ── Canvi de TÍTOL (mateix any) = REANOMENAR la sessió carregada ──────────
+# Editar el títol mai crea una sessió nova (per això hi ha el botó
+# «➕ Nova sessió»): la carpeta de la sessió actual es reanomena i tot el
+# treball segueix intacte.
+_prev_loaded_str = st.session_state.get("loaded_session_dir")
+if (
+    session_identity_changed
+    and not is_app_boot
+    and _prev_loaded_str
+    and section_name.strip()
+):
+    _prev_section, _prev_year = infer_section_year_from_session_name(
+        previous_session_identity or ""
+    )
+    _prev_dir = Path(_prev_loaded_str)
+    if _prev_year == year and _prev_dir.exists() and _prev_dir != default_session_dir:
+        if default_session_dir.exists():
+            # toast (no error): sobreviu al st.rerun i l'usuari entén per
+            # què el títol «rebota» al valor anterior.
+            st.toast(
+                f"Ja existeix una sessió «{default_session_dir.name}»: "
+                "tria un altre nom o selecciona-la al desplegable.",
+                icon="⚠️",
+            )
+            st.session_state["_pending_section_name"] = _prev_section
+            st.rerun()
+        _meta = session_store.read_session_metadata(_prev_dir)
+        _old_name = _prev_dir.name
+        try:
+            _prev_dir.rename(default_session_dir)
+        except OSError as _exc:
+            # Fitxer obert a Excel / lock de sync: mai una pantalla vermella
+            # per editar el títol — avisem i restaurem el nom anterior.
+            st.toast(
+                f"No s'ha pogut reanomenar la sessió ({_exc}). Tanca els "
+                "fitxers oberts (Excel) i torna-ho a provar.",
+                icon="⚠️",
+            )
+            st.session_state["_pending_section_name"] = _prev_section
+            st.rerun()
+        try:
+            _m_month = int(_meta.get("month", DEFAULT_MONTH))
+        except (TypeError, ValueError):
+            _m_month = DEFAULT_MONTH
+        (default_session_dir / "session.txt").write_text(
+            session_store.session_manifest(year, _m_month, section_name.strip()),
+            encoding="utf-8",
+        )
+        write_last_session_name(default_session_dir)
+        st.session_state["loaded_session_dir"] = str(default_session_dir)
+        st.session_state["session_identity"] = session_identity
+        st.toast(
+            f"Sessió reanomenada: «{_old_name}» → «{default_session_dir.name}»",
+            icon="✏️",
+        )
+        st.rerun()
 
 if session_identity_changed:
     reset_year_sensitive_widget_state()
@@ -422,6 +491,10 @@ else:
         # perquè els editors rellegeixin del disc de la sessió nova.
         from src.ui.session_keys import clear_tab_session_state as _clear_keys
         _clear_keys(st.session_state)
+        # Propostes d'equilibri de la sessió ANTERIOR: fora (serien un diff
+        # obsolet contra el calendari de la sessió nova).
+        from src.services.balance_proposal import discard_proposal as _dp
+        _dp()
 
 # Avís de col·lisió de noms: títols diferents poden sanejar-se a la MATEIXA
 # carpeta («Equip TC» i «Equip.TC» → Equip_TC_2026) i compartirien dades.
@@ -439,6 +512,64 @@ if (
 
 # Registrem la sessió carregada per a la propera rerunada.
 st.session_state[_loaded_key] = _loaded_now
+
+# ── Botó «➕ Nova sessió» ───────────────────────────────────────────────────
+# L'única via per crear sessions noves (editar el títol només reanomena).
+if not st.session_state.get("_new_session_armed"):
+    if st.sidebar.button(
+        "➕ Nova sessió",
+        key="new_session_btn",
+        width="stretch",
+        help="Crea una sessió nova buida (l'actual es desa abans). Les "
+             "dades mestres (facultatius, regles) es traspassen.",
+    ):
+        st.session_state["_new_session_armed"] = True
+        st.rerun()
+else:
+    _new_title = st.sidebar.text_input(
+        "Nom de la nova sessió",
+        key="new_session_name_input",
+        placeholder="p. ex. Secció B",
+    )
+    _ns_ok, _ns_no = st.sidebar.columns(2)
+    if _ns_ok.button(
+        "Crea",
+        type="primary",
+        width="stretch",
+        key="new_session_create",
+        disabled=not str(_new_title or "").strip(),
+    ):
+        _clean_title = str(_new_title).strip()
+        _safe_new = "".join(
+            c if c.isalnum() or c in {"_", "-"} else "_" for c in _clean_title
+        ).strip("_") or "Seccio"
+        _new_dir = DEFAULT_SESSION_ROOT / f"{_safe_new}_{year}"
+        if _new_dir.exists():
+            st.sidebar.error("Ja existeix una sessió amb aquest nom.")
+        else:
+            # Desa la sessió actual, crea la nova (amb traspàs de mestres),
+            # buida el workspace i carrega-la.
+            sync_workspace_to_loaded_session()
+            create_empty_session_folder(
+                _new_dir, year,
+                carry_forward_source=session_dir if session_dir.exists() else None,
+                section_name=_clean_title,
+            )
+            session_store.reset_current_workspace_for_new_session(year)
+            load_session_folder(_new_dir, year, DEFAULT_MONTH)
+            set_workflow_state(False)
+            write_last_session_name(_new_dir)
+            from src.ui.session_keys import clear_tab_session_state as _clear_new
+            _clear_new(st.session_state)
+            st.session_state["_pending_section_name"] = _clean_title
+            st.session_state["loaded_session_dir"] = str(_new_dir)
+            st.session_state["session_identity"] = f"{_safe_new}_{year}"
+            st.session_state.pop("_new_session_armed", None)
+            st.toast(f"Sessió nova: «{_new_dir.name}»", icon="🆕")
+            st.rerun()
+    if _ns_no.button("Cancel·la", width="stretch", key="new_session_cancel"):
+        st.session_state.pop("_new_session_armed", None)
+        st.rerun()
 
 planning_scope, month, selected_quarter, selected_semester, selected_months, display_month = (
     weekday_scope_values(DEFAULT_MONTH)
@@ -678,7 +809,6 @@ with data_tab2:
         franges_subtab,
         equilibri_subtab,
         festius_subtab,
-        eligibility_subtab,
         absences_subtab,
         guards_subtab,
         altres_subtab,
@@ -687,7 +817,6 @@ with data_tab2:
             "Franges de treball",
             "Regles d'equilibri setmanal",
             "Festius",
-            "Elegibilitat",
             "Absències",
             "Guàrdies",
             "Altres restriccions",
@@ -761,19 +890,6 @@ with data_tab2:
             base_calendar_overrides_path,
             date_input_value_in_year,
         )
-    with eligibility_subtab:
-        st.caption(
-            "Restricció estructural: aplica al calendari INICIAL i al "
-            "DEFINITIU. Defineix quins facultatius poden cobrir cada "
-            "activitat (`allowed=0` bloqueja, `allowed=1` permet)."
-        )
-        render_eligibility_editor(
-            eligibility_path,
-            professional_options,
-            weekday_eligibility_slots,
-            "weekday",
-        )
-        warn_eligibility_vs_initial(eligibility_path)
     with absences_subtab:
         st.caption(
             "Restricció estructural: aplica al calendari INICIAL i al "
@@ -797,27 +913,49 @@ with data_tab2:
         warn_guards_vs_initial(guards_path)
 
     with altres_subtab:
-        # Totes s'apliquen quan cliques Generar a Calendari.
+        # Totes s'apliquen quan cliques Generar a Calendari. Ordenades per
+        # JERARQUIA: primer les que el solver NO pot infringir mai (dures),
+        # després les que respecta si pot (toves) i al final la configuració.
+        st.markdown("##### 🔒 Restriccions dures (es compleixen sempre)")
+        render_fixed_machines_editor(slot_catalog_path, all_professional_options)
+        with st.expander("Canvi d'activitat (manual)", expanded=False):
+            st.caption(
+                "Edita una assignació concreta del calendari generat. El "
+                "canvi es desa com a preassignació; el solver la respectarà "
+                "a la pròxima Generació."
+            )
+            render_schedule_changes_editor(
+                year=year,
+                month=month,
+                selected_months=selected_months,
+                professional_options=professional_options,
+                all_professional_options=all_professional_options,
+            )
         with st.expander("Llocs on treballa cada facultatiu", expanded=False):
             render_allowed_areas_editor(
                 professionals_path,
                 eligibility_path,
             )
-        with st.expander("Comitès", expanded=False):
-            render_comite_editor(
-                professional_options=professional_options,
-                all_professional_options=all_professional_options,
-                catalog_weekday_slots=catalog_weekday_slots,
+        with st.expander("Peonades/mes (jornada completa)", expanded=False):
+            render_peonada_cap_editor()
+
+        st.markdown("##### ⚖️ Restriccions toves (es respecten si el calendari ho permet)")
+        with st.expander("Roda d'assignació (torns rotatoris)", expanded=False):
+            from src.ui.wheel_editor import render_wheel_editor
+            render_wheel_editor(existing_slots, professional_options)
+        with st.expander("Elegibilitat per activitat", expanded=False):
+            st.caption(
+                "Defineix quins facultatius poden cobrir cada activitat "
+                "(`allowed=0` bloqueja, `allowed=1` permet). Aplica al "
+                "calendari inicial i al definitiu."
             )
-        with st.expander("Comodí (fallback)", expanded=False):
-            render_comodi_editor(professionals_path)
-        render_fixed_machines_editor(slot_catalog_path, all_professional_options)
-        with st.expander("Màquines que es doblen per facultatiu", expanded=False):
-            render_doubled_machines_section(
-                professionals_path,
+            render_eligibility_editor(
                 eligibility_path,
-                catalog_weekday_slots=catalog_weekday_slots,
+                professional_options,
+                weekday_eligibility_slots,
+                "weekday",
             )
+            warn_eligibility_vs_initial(eligibility_path)
         with st.expander(
             "Dies de la setmana no-presencials per facultatiu",
             expanded=False,
@@ -834,21 +972,22 @@ with data_tab2:
                 professionals_path, eligibility_path,
             )
             warn_pres_weekday_vs_initial(professionals_path)
-        with st.expander("Peonades/mes (jornada completa)", expanded=False):
-            render_peonada_cap_editor()
-        with st.expander("Canvi d'activitat (manual)", expanded=False):
-            st.caption(
-                "Edita una assignació concreta del calendari generat. El "
-                "canvi es desa com a preassignació; el solver la respectarà "
-                "a la pròxima Generació."
-            )
-            render_schedule_changes_editor(
-                year=year,
-                month=month,
-                selected_months=selected_months,
+        with st.expander("Comitès", expanded=False):
+            render_comite_editor(
                 professional_options=professional_options,
                 all_professional_options=all_professional_options,
+                catalog_weekday_slots=catalog_weekday_slots,
             )
+
+        st.markdown("##### ⚙️ Configuració")
+        with st.expander("Màquines que es doblen per facultatiu", expanded=False):
+            render_doubled_machines_section(
+                professionals_path,
+                eligibility_path,
+                catalog_weekday_slots=catalog_weekday_slots,
+            )
+        with st.expander("Comodí (fallback)", expanded=False):
+            render_comodi_editor(professionals_path)
 
 with weekday_calendar_tab:
     render_weekday_planning_tab(
