@@ -1,24 +1,25 @@
-"""Desplegables ràpids sota el render del calendari (pestanya Calendari).
+"""Ajustos ràpids sota el render del calendari (pestanya Calendari).
 
-Dos models, segons l'acció:
+TOTS s'apliquen SENSE el solver (el botó és «Introduir», no «Reajustar»):
 
-  • Afegir absència / Afegir guàrdia  → ESCRIUEN a les dades
-    (data/absences, data/guards). Creen un FORAT de cobertura que ha de
-    resoldre el SOLVER: en clicar «Generar», el solver hi posa un altre
-    facultatiu intentant mantenir el calendari equilibrat.
+  • Introduir absència / guàrdia → es registra a les dades (data/absences,
+    data/guards; la guàrdia porta la POSTGUÀRDIA de l'endemà) I s'aplica
+    DIRECTAMENT al calendari generat: cada casella alliberada passa al
+    SUBSTITUT vàlid amb menys càrrega mensual proporcional a la jornada
+    (vegeu _cover_professional_cells) — res més no es mou. Sense candidat,
+    la casella queda buida. El solver només ho tindrà en compte quan es
+    torni a «Generar».
 
   • Canvi puntual / Ordinària↔peonada / Canvi de presencialitat →
     EDICIÓ DIRECTA del calendari generat (`outputs/schedule_weekday.csv`)
-    + re-render a l'instant, sense passar pel solver. Són decisions
-    manuals deliberades que no creen forats (tries el facultatiu /
-    marques un extra / gires PRES↔NP). NO sobreviuen a una nova «Generació».
+    + re-render a l'instant. NO sobreviuen a una nova «Generació».
 """
-from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
 
 from src.domain.constants import ABSENCE_TYPES
 from src.domain.schedule_format import is_review_slot
@@ -58,6 +59,215 @@ def _append_row(path: Path, header_cols: list[str], row: dict) -> None:
     df.to_csv(path, index=False)
 
 
+def _row_label(row) -> str:
+    return f"{row['day']} · {row['franja']} · {row['slot_id']}  ({row.get('professional', '')})"
+
+
+_ELIGIBILITY_PATH = Path("data/eligibility.csv")
+_REDUCTIONS_PATH = Path("data/reductions/assignments.csv")
+_WD_CODES = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY",
+             "SATURDAY", "SUNDAY"]
+
+
+def _read_csv_or_empty(path: Path) -> pd.DataFrame:
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return pd.DataFrame()
+
+
+def _cover_professional_cells(
+    df: pd.DataFrame,
+    mask: pd.Series,
+    removed: str,
+    candidates: list[str],
+    absences_path: Path,
+    guards_path: Path,
+    professionals_path: Path,
+) -> tuple[int, int, str]:
+    """Cobreix les caselles del facultatiu absent amb un SUBSTITUT
+    determinista (SENSE solver): per a cada (dia, franja) afectat, tria
+    el candidat vàlid amb MENYS càrrega aquell mes, proporcional a la
+    jornada. Vàlid = no és l'absent, no té res aquella franja, no està
+    absent/de guàrdia/postguàrdia aquell dia, treballa aquell dia de la
+    setmana, és elegible per a les màquines (allowed=0 exclou) i el seu
+    mode de presència ho permet. Totes les màquines que l'absent duia en
+    una mateixa franja van al MATEIX substitut (preserva blocs vinculats).
+    Sense candidat vàlid, la casella queda buida. No toca res més.
+    Retorna (cobertes, forats, detall_substituts)."""
+    from src.domain.constants import GUARDS_RESERVED_SLOT_IDS
+    removed_u = str(removed).strip().upper()
+    # Les files de GUÀRDIA del calendari (GD/POST_GUARDIA/REFUERZO) NO se
+    # substitueixen: es gestionen des de l'editor de guàrdies (les dades
+    # seguirien dient l'altre nom i la capçalera del PDF divergiria).
+    if "slot_id" in df.columns:
+        mask = mask & ~df["slot_id"].str.strip().str.upper().isin(
+            GUARDS_RESERVED_SLOT_IDS
+        )
+
+    profd = _read_csv_or_empty(professionals_path)
+    presence_mode: dict = {}
+    nonw: dict = {}
+    fallback_ids: set = set()
+    if not profd.empty and "professional_id" in profd.columns:
+        for r in profd.itertuples(index=False):
+            pid = str(getattr(r, "professional_id", "") or "").strip().upper()
+            if not pid:
+                continue
+            try:
+                if int(float(getattr(r, "fallback", 0) or 0)) == 1:
+                    fallback_ids.add(pid)
+            except (TypeError, ValueError):
+                pass
+            presence_mode[pid] = str(
+                getattr(r, "presence_mode", "") or ""
+            ).strip().upper()
+            nonw[pid] = {
+                c.strip().upper()
+                for c in str(getattr(r, "non_working_weekdays", "") or "").split(";")
+                if c.strip()
+            }
+
+    elig = _read_csv_or_empty(_ELIGIBILITY_PATH)
+    elig_block: set = set()
+    if not elig.empty and {"professional_id", "slot_id", "allowed"}.issubset(elig.columns):
+        blk = elig[pd.to_numeric(elig["allowed"], errors="coerce").fillna(1) == 0]
+        elig_block = {
+            (str(r.professional_id).strip().upper(), str(r.slot_id).strip().upper())
+            for r in blk.itertuples(index=False)
+        }
+
+    absd = _read_csv_or_empty(absences_path)
+    abs_ranges = []
+    if not absd.empty and {"professional_id", "start_day", "end_day"}.issubset(absd.columns):
+        for r in absd.itertuples(index=False):
+            try:
+                abs_ranges.append((
+                    str(r.professional_id).strip().upper(),
+                    date.fromisoformat(str(r.start_day)[:10]),
+                    date.fromisoformat(str(r.end_day)[:10]),
+                ))
+            except ValueError:
+                continue
+
+    guardd = _read_csv_or_empty(guards_path)
+    guard_days: set = set()
+    post_days: set = set()
+    if not guardd.empty and {"day", "professional_id"}.issubset(guardd.columns):
+        for r in guardd.itertuples(index=False):
+            pid = str(r.professional_id).strip().upper()
+            try:
+                gd = date.fromisoformat(str(r.day)[:10])
+            except ValueError:
+                continue
+            guard_days.add((pid, gd.isoformat()))
+            post_days.add((pid, (gd + timedelta(days=1)).isoformat()))
+
+    redd = _read_csv_or_empty(_REDUCTIONS_PATH)
+    reductions = []
+    if not redd.empty and {"professional_id", "start_day", "end_day", "reduction_pct"}.issubset(redd.columns):
+        for r in redd.itertuples(index=False):
+            try:
+                reductions.append((
+                    str(r.professional_id).strip().upper(),
+                    date.fromisoformat(str(r.start_day)[:10]),
+                    date.fromisoformat(str(r.end_day)[:10]),
+                    float(r.reduction_pct),
+                ))
+            except (ValueError, TypeError):
+                continue
+
+    def _cap_pct(p: str, ym: str) -> float:
+        c = 100.0
+        c -= 20.0 * len(nonw.get(p, set()) & set(_WD_CODES[:5]))
+        m_ini = date.fromisoformat(ym + "-01")
+        m_fi = (pd.Timestamp(m_ini) + pd.offsets.MonthEnd(0)).date()
+        actives = [
+            pct for (pid, s, e, pct) in reductions
+            if pid == p and s <= m_fi and e >= m_ini
+        ]
+        if actives:
+            c -= max(actives)
+        return max(c, 10.0)
+
+    def _blocked(p: str, day_iso: str, franja: str) -> bool:
+        try:
+            d = date.fromisoformat(day_iso)
+        except ValueError:
+            return True
+        if _WD_CODES[d.weekday()] in nonw.get(p, set()):
+            return True
+        for (pid, s, e) in abs_ranges:
+            if pid == p and s <= d <= e:
+                return True
+        if (p, day_iso) in post_days:
+            return True
+        if (p, day_iso) in guard_days and franja in ("TARDA", "NIT"):
+            return True
+        return False
+
+    # Càrrega mensual actual (files amb facultatiu real) per (prof, mes).
+    loads: dict = {}
+    prof_u = df["professional"].str.strip().str.upper()
+    ym_col = df["day"].str.slice(0, 7)
+    for pu, ym in zip(prof_u, ym_col):
+        if pu and pu not in ("NONE", "NAN"):
+            loads[(pu, ym)] = loads.get((pu, ym), 0) + 1
+
+    covered = holes = 0
+    by_sub: dict = {}
+    aff = df.loc[mask]
+    for (day, franja), idxs in aff.groupby(["day", "franja"]).groups.items():
+        idx_list = list(idxs)
+        rows = df.loc[idx_list]
+        slots = [str(s).strip().upper() for s in rows["slot_id"]]
+        pres_set = {
+            str(v).strip().upper() for v in rows.get("presentiality", pd.Series())
+        }
+        ym = str(day)[:7]
+        busy = set(
+            df.loc[
+                (df["day"] == day) & (df["franja"] == franja), "professional"
+            ].str.strip().str.upper()
+        ) - {"", removed_u}
+        best = None
+        for p in candidates:
+            pu = str(p).strip().upper()
+            if pu in ("", removed_u) or pu in busy:
+                continue
+            if pu in fallback_ids:
+                # El comodí és l'últim recurs del SOLVER, no del substitut
+                # ràpid (amb poca càrrega sempre sortiria el primer).
+                continue
+            if _blocked(pu, str(day), str(franja).strip().upper()):
+                continue
+            if any((pu, s) in elig_block for s in slots):
+                continue
+            pm = presence_mode.get(pu, "")
+            if pm == "NO_PRESENCIAL" and "PRESENCIAL" in pres_set:
+                continue
+            if pm == "PRESENCIAL" and "NO_PRESENCIAL" in pres_set:
+                continue
+            load = loads.get((pu, ym), 0)
+            key = (load / (_cap_pct(pu, ym) / 100.0), load, pu)
+            if best is None or key < best[0]:
+                best = (key, p)
+        if best is not None:
+            sub = best[1]
+            df.loc[idx_list, "professional"] = sub
+            su = str(sub).strip().upper()
+            loads[(su, ym)] = loads.get((su, ym), 0) + len(idx_list)
+            covered += len(idx_list)
+            by_sub[sub] = by_sub.get(sub, 0) + len(idx_list)
+        else:
+            df.loc[idx_list, "professional"] = ""
+            holes += len(idx_list)
+    detail = ", ".join(f"{s}: {n}" for s, n in sorted(by_sub.items()))
+    return covered, holes, detail
+
+
 def _load_schedule() -> pd.DataFrame | None:
     if not _SCHEDULE_PATH.exists() or _SCHEDULE_PATH.stat().st_size == 0:
         return None
@@ -82,47 +292,20 @@ def _save_and_rerender(
     st.rerun()
 
 
-def _row_label(row) -> str:
-    return f"{row['day']} · {row['franja']} · {row['slot_id']}  ({row.get('professional', '')})"
-
-
-def _reajust_button(
-    reajustar: Callable[[str], None] | None, key: str, what: str,
+# ─────────────────────────────────────────────────────────────────────────────
+# 1) Introduir absència  → dades + buidat DIRECTE de les caselles (sense solver)
+# ─────────────────────────────────────────────────────────────────────────────
+def _quick_add_absence(
+    absences_path: Path, guards_path: Path, profs, year, month,
+    professionals_path, pdf_output_dir, selected_months,
 ) -> None:
-    """Botó de reajust amb MÍNIMS CANVIS dins el desplegable d'absència/
-    guàrdia. Reresol el calendari conservant al màxim les assignacions
-    actuals (estabilitat soft): només mou el necessari per cobrir el forat
-    que acabes de crear, sense regenerar-ho tot des de zero.
-
-    `reajustar(label)` l'injecta `app.py` (crida `run_weekday_regenerate`
-    amb el calendari actual com a punt de partida i fa `st.rerun()`)."""
-    if reajustar is None:
-        return
-    exists = _SCHEDULE_PATH.exists() and _SCHEDULE_PATH.stat().st_size > 0
-    if st.button(
-        "🔧 Reajustar (mínims canvis)",
-        key=key,
-        width="stretch",
-        type="primary",
-        disabled=not exists,
-        help=(
-            "Reresol conservant al màxim el calendari actual: només mou el "
-            "necessari per cobrir el forat. Més ràpid i estable que «Generar» "
-            "(que recomença de zero)."
-        ) if exists else "Genera primer el calendari per poder reajustar.",
-    ):
-        reajustar(f"Reajustar ({what})")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 1) Afegir absència  → escriu a dades; el solver omple el forat en Generar
-# ─────────────────────────────────────────────────────────────────────────────
-def _quick_add_absence(absences_path: Path, profs, year, month, reajustar=None) -> None:
-    with st.expander("➕ Afegir absència", expanded=False):
+    with st.expander("➕ Introduir absència", expanded=False):
         st.caption(
-            "Registra una absència i prem **Reajustar (mínims canvis)** aquí "
-            "sota: el solver cobrirà el forat amb un altre facultatiu movent "
-            "el mínim possible (no cal «Generar» de nou)."
+            "Es registra a les dades i s'aplica DIRECTAMENT al calendari: "
+            "cada casella del facultatiu absent passa al company vàlid amb "
+            "**menys càrrega aquell mes (proporcional a la jornada)** — res "
+            "més no es mou i el solver NO intervé. Si cap candidat pot, la "
+            "casella queda buida (recol·loca-la amb el canvi puntual)."
         )
         with st.form("qa_absence_form", clear_on_submit=True):
             c1, c2 = st.columns(2)
@@ -132,7 +315,7 @@ def _quick_add_absence(absences_path: Path, profs, year, month, reajustar=None) 
             d_ini = c3.date_input("Data inici", value=_default_day(year, month), key="qa_abs_ini")
             d_fi = c4.date_input("Data fi", value=_default_day(year, month), key="qa_abs_fi")
             notes = st.text_input("Notes (opcional)", key="qa_abs_notes")
-            submitted = st.form_submit_button("Afegir absència", width="stretch")
+            submitted = st.form_submit_button("Introduir absència", width="stretch")
         if submitted:
             if d_fi < d_ini:
                 st.error("La data fi no pot ser anterior a la d'inici.")
@@ -146,32 +329,67 @@ def _quick_add_absence(absences_path: Path, profs, year, month, reajustar=None) 
                     "notes": notes,
                 },
             )
-            st.toast(
-                f"Absència afegida: {prof} ({atype}) {d_ini}→{d_fi}. "
-                "Prem **Reajustar (mínims canvis)** perquè el solver ompli "
-                "el forat.",
-                icon="✅",
-            )
-            st.rerun()
-        _reajust_button(reajustar, "qa_abs_reajust", "absència")
+            df = _load_schedule()
+            affected = 0
+            covered = holes = 0
+            detail = ""
+            if df is not None and not df.empty and {
+                "day", "franja", "slot_id", "professional",
+            }.issubset(df.columns):
+                dd = pd.to_datetime(df["day"], errors="coerce")
+                mask = (
+                    (df["professional"].str.strip().str.upper() == str(prof).strip().upper())
+                    & (dd >= pd.Timestamp(d_ini))
+                    & (dd <= pd.Timestamp(d_fi))
+                )
+                affected = int(mask.sum())
+                if affected:
+                    covered, holes, detail = _cover_professional_cells(
+                        df, mask, prof, profs,
+                        absences_path, guards_path, professionals_path,
+                    )
+            if affected:
+                msg = (
+                    f"Absència introduïda: {prof} ({atype}) {d_ini}→{d_fi}. "
+                    f"{covered} caselles cobertes"
+                    + (f" ({detail})" if detail else "")
+                    + (f"; {holes} sense candidat (buides)" if holes else "")
+                    + "."
+                )
+                _save_and_rerender(
+                    df, professionals_path, pdf_output_dir, year, selected_months, msg,
+                )
+            else:
+                st.toast(
+                    f"Absència registrada: {prof} ({atype}) {d_ini}→{d_fi} "
+                    "(cap assignació afectada al calendari actual).",
+                    icon="✅",
+                )
+                st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2) Afegir guàrdia  → escriu a dades; el solver reassigna en Generar
+# 2) Introduir guàrdia  → dades + buidat DIRECTE (tarda/nit + postguàrdia)
 # ─────────────────────────────────────────────────────────────────────────────
-def _quick_add_guard(guards_path: Path, profs, year, month, reajustar=None) -> None:
-    with st.expander("➕ Afegir guàrdia", expanded=False):
+def _quick_add_guard(
+    guards_path: Path, profs, year, month,
+    professionals_path, pdf_output_dir, selected_months,
+) -> None:
+    with st.expander("➕ Introduir guàrdia", expanded=False):
         st.caption(
-            "Registra una guàrdia (genera postguàrdia l'endemà) i prem "
-            "**Reajustar (mínims canvis)** aquí sota: el solver reassignarà "
-            "les màquines alliberades movent el mínim possible."
+            "Es registra a les dades (amb la **postguàrdia** de l'endemà) i "
+            "s'aplica DIRECTAMENT al calendari: la tarda i la nit del dia de "
+            "guàrdia i tot l'endemà passen al company vàlid amb **menys "
+            "càrrega aquell mes (proporcional a la jornada)** — res més no "
+            "es mou i el solver NO intervé. Sense candidat, la casella "
+            "queda buida."
         )
         with st.form("qa_guard_form", clear_on_submit=True):
             c1, c2 = st.columns(2)
             g_day = c1.date_input("Dia de la guàrdia", value=_default_day(year, month), key="qa_guard_day")
             prof = c2.selectbox("Facultatiu", profs, key="qa_guard_prof")
             notes = st.text_input("Notes (opcional)", key="qa_guard_notes")
-            submitted = st.form_submit_button("Afegir guàrdia", width="stretch")
+            submitted = st.form_submit_button("Introduir guàrdia", width="stretch")
         if submitted:
             _append_row(
                 guards_path,
@@ -181,21 +399,62 @@ def _quick_add_guard(guards_path: Path, profs, year, month, reajustar=None) -> N
                     "guard_kind": "guardia", "notes": notes,
                 },
             )
-            st.toast(
-                f"Guàrdia afegida: {prof} el {g_day}. Prem **Reajustar "
-                "(mínims canvis)** perquè el solver reassigni.",
-                icon="✅",
-            )
-            st.rerun()
-        _reajust_button(reajustar, "qa_guard_reajust", "guàrdia")
+            df = _load_schedule()
+            affected = 0
+            covered = holes = 0
+            detail = ""
+            if df is not None and not df.empty and {
+                "day", "franja", "slot_id", "professional",
+            }.issubset(df.columns):
+                pmask = (
+                    df["professional"].str.strip().str.upper()
+                    == str(prof).strip().upper()
+                )
+                frU = df["franja"].str.strip().str.upper()
+                post_day = (g_day + timedelta(days=1)).isoformat()
+                # La guàrdia allibera la tarda i la nit del dia; la
+                # POSTGUÀRDIA allibera tot l'endemà — tot s'ha de cobrir.
+                mask = pmask & (
+                    ((df["day"] == g_day.isoformat()) & frU.isin({"TARDA", "NIT"}))
+                    | (df["day"] == post_day)
+                )
+                affected = int(mask.sum())
+                if affected:
+                    covered, holes, detail = _cover_professional_cells(
+                        df, mask, prof, profs,
+                        absences_path, guards_path, professionals_path,
+                    )
+            if affected:
+                msg = (
+                    f"Guàrdia introduïda: {prof} el {g_day} (postguàrdia "
+                    f"{(g_day + timedelta(days=1)).isoformat()}). "
+                    f"{covered} caselles cobertes"
+                    + (f" ({detail})" if detail else "")
+                    + (f"; {holes} sense candidat (buides)" if holes else "")
+                    + "."
+                )
+                _save_and_rerender(
+                    df, professionals_path, pdf_output_dir, year, selected_months, msg,
+                )
+            else:
+                st.toast(
+                    f"Guàrdia registrada: {prof} el {g_day} (cap assignació "
+                    "afectada al calendari actual).",
+                    icon="✅",
+                )
+                st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3) Canvi puntual d'assignació  → edició directa
+# 3) Introduir canvi puntual d'assignació  → edició directa
 # ─────────────────────────────────────────────────────────────────────────────
 def _quick_add_assignment_change(profs, year, professionals_path, pdf_output_dir, selected_months) -> None:
-    with st.expander("➕ Afegir canvi puntual d'assignació", expanded=False):
-        st.caption("Canvi manual immediat (sense solver): tries tu el facultatiu.")
+    with st.expander("➕ Introduir canvi puntual d'assignació", expanded=False):
+        st.caption(
+            "Canvi manual immediat (sense solver): tries tu el facultatiu. "
+            "Serveix també per recol·locar les caselles buidades per una "
+            "absència o guàrdia acabada d'introduir."
+        )
         df = _load_schedule()
         if df is None or df.empty:
             st.info("Genera primer el calendari per canviar assignacions.")
@@ -207,7 +466,7 @@ def _quick_add_assignment_change(profs, year, professionals_path, pdf_output_dir
         with st.form("qa_change_form", clear_on_submit=True):
             label = st.selectbox("Assignació a canviar", list(labels.keys()), key="qa_chg_slot")
             new_prof = st.selectbox("Nou facultatiu", [""] + profs, key="qa_chg_prof")
-            submitted = st.form_submit_button("Aplicar canvi al calendari", width="stretch")
+            submitted = st.form_submit_button("Introduir canvi", width="stretch")
         if submitted:
             idx = labels[label]
             old = df.at[idx, "professional"]
@@ -351,25 +610,30 @@ def render_quick_add_panels(
     pdf_output_dir: Path,
     absences_path: Path,
     guards_path: Path,
-    reajustar: Callable[[str], None] | None = None,
 ) -> None:
     """Renderitza els 5 desplegables d'ajust ràpid sota el render.
-
-    Absència/guàrdia escriuen a dades i tenen un botó **Reajustar (mínims
-    canvis)** que el solver resol conservant al màxim el calendari actual;
-    canvi puntual, peonada i canvi de presencialitat editen el calendari
-    directament (a l'instant)."""
+    TOTS actuen SENSE el solver: absència i guàrdia es registren a les
+    dades i les seves caselles passen al substitut amb menys càrrega
+    mensual proporcional; canvi puntual, peonada i presencialitat editen
+    el calendari directament."""
     profs = _profs(all_professional_options or professional_options)
-    st.markdown("##### Ajustos ràpids")
+    st.markdown("##### Ajustos ràpids (sense solver)")
     st.caption(
-        "**Absència** i **guàrdia** les resol el solver: afegeix-les i prem "
-        "**Reajustar (mínims canvis)** dins el seu desplegable (només mou el "
-        "necessari). **Canvi puntual**, **peonada** i **canvi de "
-        "presencialitat** s'apliquen a l'instant (edició directa, es perden "
-        "si tornes a Generar)."
+        "Tot s'aplica a l'instant, sense recalcular res: **absència** i "
+        "**guàrdia** (amb postguàrdia) passen les caselles alliberades al "
+        "company vàlid amb **menys càrrega del mes** (proporcional a la "
+        "jornada); **canvi puntual**, **peonada** i **presencialitat** "
+        "editen la casella que triïs. El solver només ho tindrà en compte "
+        "si tornes a **Generar**."
     )
-    _quick_add_absence(absences_path, profs, year, month, reajustar)
-    _quick_add_guard(guards_path, profs, year, month, reajustar)
+    _quick_add_absence(
+        absences_path, guards_path, profs, year, month,
+        professionals_path, pdf_output_dir, selected_months,
+    )
+    _quick_add_guard(
+        guards_path, profs, year, month,
+        professionals_path, pdf_output_dir, selected_months,
+    )
     _quick_add_assignment_change(profs, year, professionals_path, pdf_output_dir, selected_months)
     _quick_toggle_peonada(year, professionals_path, pdf_output_dir, selected_months)
     _quick_toggle_presentiality(year, professionals_path, pdf_output_dir, selected_months)

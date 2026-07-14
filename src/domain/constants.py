@@ -98,6 +98,13 @@ QUOTA_EXEMPT_PROFESSIONALS = {"NONE"}
 #  pres/no-pres (editables + planning_rules) · 4 peonades ≤3/mes ·
 #  5 resta a TLD · 6 comitè mateixa localització · 7 guàrdia matí.
 SOLVER_WEIGHTS = {
+    # Preassignacions FIXES (màquines fixes + canvis manuals): la tova
+    # de més pes de totes — abans era dura i un xoc de fixos deixava el
+    # model INFEASIBLE; ara es viola el mínim imprescindible.
+    "fixed_assignment_violation": 40_000_000,
+    # Llocs on treballa cada facultatiu (allowed_areas): per sota dels
+    # fixos, per sobre de l'elegibilitat.
+    "allowed_area_violation": 20_000_000,
     # Elegibilitat: TOVA però amb pes molt alt (només cedeix si no hi ha
     # cap altra opció possible; mai supera la cobertura dura).
     "eligibility_penalty": 10_000_000,

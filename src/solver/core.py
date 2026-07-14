@@ -231,22 +231,100 @@ def _log_per_professional_summary(log, solver, real_professionals,
         log(f"{p:<12}{pres:>6}{normal:>8}{peo:>6}{ordin:>6}{total:>7}")
 
 
-def _infeasibility_message(solver, assume_names) -> str:
-    """Missatge explicatiu quan el model és infactible, intentant assenyalar
-    les restriccions dures fràgils (H5/H6/H7) implicades."""
+def _availability_problem_report(
+    keys_by_day, professionals, unavailability_df,
+) -> str:
+    """Quan el model és INFEASIBLE, la causa més habitual és un (dia,
+    franja) on la cobertura DURA demana més facultatius que els que
+    queden disponibles un cop aplicades les absències, guàrdies i
+    indisponibilitats (també dures). Compara demanda (instàncies de
+    màquina) amb oferta OPTIMISTA (facultatius sense bloqueig del dia o
+    de la franja sencera): si demanda > oferta el problema és segur, i
+    s'assenyala amb dia, franja i els noms dels no disponibles."""
+    # Bloquejos per (professional, dia): {"ALL"} = dia sencer; o franges.
+    blocked: dict = {}
+    if unavailability_df is not None and not unavailability_df.empty:
+        has_franja = "franja" in unavailability_df.columns
+        has_pres = "presentiality" in unavailability_df.columns
+        for row in unavailability_df.itertuples(index=False):
+            pres = str(getattr(row, "presentiality", "") or "").strip().upper() if has_pres else ""
+            if pres and pres not in ("", "NAN", "NONE"):
+                continue  # bloqueig parcial per presencialitat: oferta optimista
+            pid = str(getattr(row, "professional_id", "") or "").strip().upper()
+            day = str(getattr(row, "day", "") or "").strip()
+            fr = str(getattr(row, "franja", "") or "").strip().upper() if has_franja else ""
+            if fr in ("NAN", "NONE"):
+                fr = ""
+            blocked.setdefault((pid, day), set()).add(fr or "ALL")
+
+    reals = [
+        str(p).strip().upper() for p in professionals
+        if str(p).strip().upper() not in ("NONE", "")
+    ]
+    lines = []
+    for day in sorted(keys_by_day):
+        by_franja: dict = {}
+        for sk in keys_by_day[day]:
+            by_franja.setdefault(str(sk[1]).strip().upper(), []).append(sk)
+        for fr, keys in sorted(by_franja.items()):
+            fora = [
+                p for p in reals
+                if blocked.get((p, day), set()) & {"ALL", fr}
+            ]
+            supply = len(reals) - len(fora)
+            if len(keys) > supply:
+                # «fins a N»: les vinculades/doblades poden compartir
+                # persona, així que N és una cota superior de la demanda.
+                lines.append(
+                    f"  · {day} ({fr.title()}): calen fins a {len(keys)} "
+                    f"facultatius i només {supply} de disponibles"
+                    + (f" (no disponibles: {', '.join(sorted(fora))})" if fora else "")
+                )
+            if len(lines) >= 8:
+                break
+        if len(lines) >= 8:
+            break
+    if not lines:
+        return ""
+    return (
+        "PROBLEMA LOCALITZAT — dies amb més màquines que facultatius "
+        "disponibles (absències/guàrdies/indisponibilitats):\n"
+        + "\n".join(lines)
+        + "\nSolucions: treure màquines d'aquests dies (franges o "
+        "puntuals), revisar les absències/guàrdies del dia, o afegir-hi "
+        "facultatius."
+    )
+
+
+def _infeasibility_message(solver, assume_names, keys_by_day=None,
+                           professionals=None, unavailability_df=None) -> str:
+    """Missatge explicatiu quan el model és infactible: assenyala les
+    restriccions dures fràgils (H5/H7) implicades i, si la causa és un
+    dèficit de disponibilitat (absències/guàrdies/festius vs cobertura),
+    diu EXACTAMENT quins dies i franges fallen i qui no hi és."""
+    parts = []
     core_idx = solver.SufficientAssumptionsForInfeasibility()
     culpables = [assume_names.get(i) for i in core_idx if i in assume_names]
     if culpables:
-        return (
-            "Model infactible. Restricció(ns) implicada(es): "
+        parts.append(
+            "Model infactible. Restricció(ns) dura(es) implicada(es): "
             + "; ".join(culpables)
-            + ". Reviseu si hi ha preassignacions o parells vinculats "
-            "que xoquen amb indisponibilitats."
+            + ". Reviseu si hi ha parells vinculats o revisions que "
+            "xoquen amb indisponibilitats."
         )
-    return (
-        "Model infactible per una causa fora de les dures fràgils "
-        "(H5/H6/H7) — probablement cobertura, presence_mode o quota."
-    )
+    else:
+        parts.append(
+            "Model infactible per una restricció DURA: cobertura de les "
+            "franges, absències/guàrdies/indisponibilitats, mode de "
+            "presència d'algun facultatiu, o el comodí amb allowed=0."
+        )
+    if keys_by_day is not None and professionals is not None:
+        report = _availability_problem_report(
+            keys_by_day, professionals, unavailability_df,
+        )
+        if report:
+            parts.append(report)
+    return "\n".join(parts)
 
 
 def build_and_solve_demo(data: dict, stability_assignments=None):
@@ -483,6 +561,29 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
                 conditional_pos2_keys.add(k)
 
     # ── Hard constraints ──────────────────────────────────────────────────────
+    # INVENTARI CANÒNIC (dur vs tou) — si toques una restricció, actualitza'l:
+    #
+    # DURES (mai es violen; si xoquen entre elles → INFEASIBLE amb avís):
+    #   1. Cobertura: cada màquina/franja té exactament el personal requerit.
+    #   2. Indisponibilitats = ABSÈNCIES + GUÀRDIES (tarda/nit/postguàrdia)
+    #      + indisponibilitats manuals (x==0).
+    #   3. FESTIUS: estructural — els dies no laborables no entren al model.
+    #   4. Compatibilitat diària (1 persona ≤ 1 màquina per franja, tret de
+    #      vinculades/doblades) + doblatge condicional.
+    #   5. Acoblament de blocs vinculats (H5, amb assumption de diagnòstic).
+    #   6. Continuïtat de revisions en festius (H7, amb assumption).
+    #   7. Mode de presència del facultatiu (NP-only / PRES-only).
+    #   8. Comodí amb allowed=0 explícit.
+    #   9. Caps durs comptables (mai infactibilitzen): flips NP→PRES i
+    #      peonades/mes.
+    #
+    # TOVES (per pes, de més a menys — vegeu SOLVER_WEIGHTS):
+    #   40M màquines fixes + canvis manuals · 20M llocs per facultatiu ·
+    #   10M elegibilitat · 6M dies NP/PRES per facultatiu · 5M estabilitat ·
+    #   5M roda d'assignació · 3M/500k targets d'equilibri (setmanals o
+    #   mensuals) · trams 3-4 equitat (PRES i ordinàries) · 100k ús de TLD ·
+    #   50k comitè-màquina mateixa àrea · 40k teletreball matí de guàrdia ·
+    #   20k repartiment de revisions · 10k balanç TC/RM.
     _add_coverage_constraints(
         model, x, professionals, slot_keys,
         unlimited_professionals=fallback_professionals,
@@ -498,16 +599,25 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
                                   unlimited_professionals=fallback_professionals,
                                   pres_flip=pres_flip)
     _add_unavailability_constraints(model, x, slot_keys, unavailability_df, keys_by_day=keys_by_day)
-    # HARD: allowed_areas (límit físic). Bloqueja (prof, slot) on l'àrea
-    # del slot no és a la llista de llocs del facultatiu. A diferència de
-    # l'eligibility (soft), aquest no es pot violar.
+    # TOVA amb pes molt alt: allowed_areas (llocs on treballa cada
+    # facultatiu). Penalitza assignar (prof, slot) fora dels seus llocs;
+    # per sobre de l'elegibilitat però per sota dels fixos — només cedeix
+    # si la cobertura dura no deixa cap altra opció (mai INFEASIBLE).
     _allowed_areas_blocks = data.get("allowed_areas_hard_blocks") or set()
+    _allowed_area_viol_terms = []
     if _allowed_areas_blocks:
         for sk in slot_keys:
             sid = str(sk[2]).strip().upper()
             for p in professionals:
                 if (str(p).strip().upper(), sid) in _allowed_areas_blocks and (p, sk) in x:
-                    model.Add(x[p, sk] == 0)
+                    _allowed_area_viol_terms.append(x[p, sk])
+    total_allowed_area_violation = model.NewIntVar(
+        0, max(1, len(_allowed_area_viol_terms)), "total_allowed_area_violation"
+    )
+    model.Add(
+        total_allowed_area_violation
+        == (sum(_allowed_area_viol_terms) if _allowed_area_viol_terms else 0)
+    )
     total_eligibility_penalty = _add_eligibility_soft(
         model, x, professionals, slot_keys, eligibility_df,
         fallback_professionals=fallback_professionals,
@@ -547,22 +657,23 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
     # INFEASIBLE, CP-SAT ens dirà QUINA d'aquestes la fa infactible, en
     # comptes d'un "INFEASIBLE" sec. El cost de reificar és menyspreable.
     assume_h5 = model.NewBoolVar("assume_H5_acoblament_vinculat")
-    assume_h6 = model.NewBoolVar("assume_H6_preassignacions_fixes")
     assume_h7 = model.NewBoolVar("assume_H7_continuitat_revisio")
     _assume_names = {
         assume_h5.Index(): "H5 (acoblament de parells vinculats)",
-        assume_h6.Index(): "H6 (preassignacions fixes)",
         assume_h7.Index(): "H7 (continuïtat de revisió en festius)",
     }
     from src.solver.preprocessing import _build_unavailability_index
     unav_index = _build_unavailability_index(unavailability_df)
     _add_structural_coupling(model, x, professionals, keys_by_day, links_by_wf=links_by_wf,
                              enforce_lit=assume_h5)
-    _add_preassignment_constraints(model, x, preassignments_df, slot_keys,
-                                   enforce_lit=assume_h6)
+    # Preassignacions fixes: TOVES amb pes màxim (H6 ha deixat de ser
+    # una dura amb assumption — un xoc de fixos ja no infactibilitza).
+    total_fixed_assignment_miss = _add_preassignment_constraints(
+        model, x, preassignments_df, slot_keys,
+    )
     _add_review_continuity(model, x, professionals, keys_by_day, slot_rows, working_map,
                            review_slots, unav_index=unav_index, enforce_lit=assume_h7)
-    model.AddAssumptions([assume_h5, assume_h6, assume_h7])
+    model.AddAssumptions([assume_h5, assume_h7])
     comite_entries = expand_comite_to_days(
         data.get("comite", pd.DataFrame()),
         unique_days,
@@ -804,6 +915,10 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
     W = SOLVER_WEIGHTS
     tier_terms = [
         ("presencial", [
+            # Ex-dures, ara TOVES amb els pesos més alts de tots: fixos
+            # (màquines fixes + canvis manuals) i llocs per facultatiu.
+            (total_fixed_assignment_miss, W["fixed_assignment_violation"]),
+            (total_allowed_area_violation, W["allowed_area_violation"]),
             (total_eligibility_penalty, W["eligibility_penalty"]),
             # Dies NP-only per facultatiu (soft, pes alt): penalitza
             # cada PRES assignat al facultatiu en un dia de la setmana
@@ -941,7 +1056,11 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         if status == cp_model.INFEASIBLE:
-            return _infeasibility_message(solver, _assume_names), [], []
+            return _infeasibility_message(
+                solver, _assume_names,
+                keys_by_day=keys_by_day, professionals=professionals,
+                unavailability_df=unavailability_df,
+            ), [], []
         return "No s'ha trobat solució.", [], []
 
     return _extract_solution(

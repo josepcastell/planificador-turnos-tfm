@@ -162,6 +162,10 @@ def export_general_weekday_pdf(
     )
 
 
+# NOTA: sense caller a la UI des que els Ajustos ràpids apliquen substitut
+# directe (v1.6.0). Es conserva deliberadament com a motor del reajust amb
+# estabilitat per si es reintrodueix el botó; si d'aquí a unes versions
+# ningú no l'usa, elimineu-la juntament amb schedule_weekday_before_reajust.
 def run_weekday_regenerate(
     label: str,
     year: int,

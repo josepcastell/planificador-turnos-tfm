@@ -549,21 +549,43 @@ def _add_structural_coupling(model, x, professionals, keys_by_day, links_by_wf=N
                             ct.OnlyEnforceIf(enforce_lit)
 
 
-def _add_preassignment_constraints(model, x, preassignments_df, slot_keys, enforce_lit=None):
-    if preassignments_df.empty:
-        return
-    for row in preassignments_df.itertuples(index=False):
-        if int(row.fixed) != 1:
-            continue
-        matching = _matching_preassignment_keys(row, slot_keys)
-        if len(matching) == 1:
-            ct = model.Add(x[row.professional_id, matching[0]] == 1)
-            if enforce_lit is not None:
-                ct.OnlyEnforceIf(enforce_lit)
-        elif len(matching) > 1:
-            ct = model.Add(sum(x[row.professional_id, sk] for sk in matching) == 1)
-            if enforce_lit is not None:
-                ct.OnlyEnforceIf(enforce_lit)
+def _add_preassignment_constraints(model, x, preassignments_df, slot_keys):
+    """TOVA amb pes màxim (per sobre de totes les altres toves): cada
+    preassignació fixa (màquines fixes de l'usuari i canvis manuals
+    d'activitat) genera un terme de «miss» que el solver només paga si
+    la cobertura dura fa impossible complir-la — un xoc de fixos ja no
+    pot deixar el model INFEASIBLE: es viola el mínim imprescindible.
+    Retorna l'IntVar amb el total de fixos incomplerts."""
+    miss_terms = []
+    unmatched = 0
+    if preassignments_df is not None and not preassignments_df.empty:
+        for idx, row in enumerate(preassignments_df.itertuples(index=False)):
+            if int(row.fixed) != 1:
+                continue
+            matching = _matching_preassignment_keys(row, slot_keys)
+            if not matching:
+                continue  # slot fora del calendari: ho detecta preprocessing
+            got = [
+                x[row.professional_id, sk]
+                for sk in matching
+                if (row.professional_id, sk) in x
+            ]
+            if not got:
+                # Hi havia slot al calendari però cap variable per a aquest
+                # professional (id divergent): compta com a miss constant —
+                # abans (dura) petava; en silenci seria pitjor.
+                unmatched += 1
+                continue
+            miss = model.NewBoolVar(f"fixmiss_{idx}_{row.professional_id}")
+            model.Add(sum(got) + miss >= 1)
+            miss_terms.append(miss)
+    total = model.NewIntVar(
+        0, max(1, len(miss_terms) + unmatched), "total_fixed_assignment_miss"
+    )
+    model.Add(
+        total == (sum(miss_terms) if miss_terms else 0) + unmatched
+    )
+    return total
 
 
 def _add_review_continuity(model, x, professionals, keys_by_day, slot_rows, working_map,

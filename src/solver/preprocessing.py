@@ -196,9 +196,10 @@ def _validate_preassignments(preassignments_df, professionals, slot_keys,
                 f"{row.day} {slot_id}: slot does not exist in calendar_slots"
             )
 
-        # H6 vs H3: una preassignació fixa sobre un dia/franja indisponible
-        # del facultatiu fa el model infactible sense missatge clar. Detecta-ho
-        # aquí amb un error explícit.
+        # Fixos vs indisponibilitat: una preassignació fixa sobre un dia/
+        # franja indisponible ja no infactibilitza (els fixos són toves),
+        # però és un error de dades — el solver la incompliria en silenci.
+        # Detecta-ho aquí amb un error explícit.
         if _preassignment_blocked(row, unav_index):
             errors.append(
                 f"{row.day} {slot_id}: '{professional_id}' té una "

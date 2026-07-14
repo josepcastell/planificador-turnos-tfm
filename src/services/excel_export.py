@@ -20,6 +20,7 @@ from src.domain.constants import GUARDS_RESERVED_SLOT_IDS
 from src.domain.schedule_format import (
     AREA_OTHER_HEX,
     area_palette_hex,
+    calendar_display_compact_slot_label,
     calendar_display_slot_area,
     calendar_display_slot_sort_key,
     is_review_slot,
@@ -45,6 +46,11 @@ _FONT_MIXED = Font(name="Calibri", size=9, color="334155")
 _FONT_GUARD = Font(name="Calibri", size=9, bold=True, color="B91C1C")
 _FONT_DEFAULT = Font(name="Calibri", size=9, color="334155")
 _ALIGN_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
+# Nom de màquina en VERTICAL (com al PDF): així un nom llarg de
+# qualsevol usuari hi cap sempre, per estreta que sigui la subcolumna.
+_ALIGN_VERTICAL = Alignment(
+    horizontal="center", vertical="center", text_rotation=90,
+)
 
 
 def _area_fill(area: str) -> PatternFill:
@@ -196,6 +202,54 @@ def _machines_for_day(week_df: pd.DataFrame, dstr: str) -> list[str]:
     )
 
 
+def _prepared_week_df(schedule_df: pd.DataFrame, days_str: list[str]) -> pd.DataFrame:
+    """Files de màquina del bloc (sense guàrdies ni files sense
+    facultatiu), amb les columnes auxiliars _sid/_pid/_franja."""
+    week_df = schedule_df[schedule_df["day"].isin(days_str)].copy()
+    if "is_flipped" not in week_df.columns:
+        week_df["is_flipped"] = 0
+    week_df["_sid"] = week_df["slot_id"].astype(str).str.strip().str.upper()
+    week_df["_pid"] = week_df["professional"].astype(str).str.strip().str.upper()
+    week_df["_franja"] = week_df["franja"].astype(str).str.strip().str.upper()
+    return week_df[
+        ~week_df["_sid"].isin(GUARDS_RESERVED_SLOT_IDS)
+        & ~week_df["_pid"].isin({"", "NONE", "NAN"})
+        & (week_df["_franja"].isin({"MATI", "TARDA", "NIT"}))
+    ].copy()
+
+
+def _machine_col_ranges(c0: int, n_sub: int, k: int) -> list[tuple[int, int]]:
+    """Reparteix les `n_sub` subcolumnes del bloc d'un dia entre les
+    seves `k` màquines (com el PDF: el dia sempre ocupa el mateix
+    ample i les màquines se'l parteixen a parts iguals)."""
+    out = []
+    for i in range(k):
+        cs = c0 + round(i * n_sub / k)
+        ce = c0 + round((i + 1) * n_sub / k) - 1
+        out.append((cs, max(cs, ce)))
+    return out
+
+
+def _merged_cell(ws, row, c0, c1, value, font, fill=None,
+                 align=_ALIGN_CENTER):
+    """Cel·la (potser fusionada) amb estil aplicat a TOT el rang, perquè
+    les vores i el fons cobreixin el bloc sencer."""
+    for cc in range(c0, c1 + 1):
+        cell = ws.cell(row=row, column=cc)
+        cell.border = _BORDER_THIN
+        if fill is not None:
+            cell.fill = fill
+    cell = ws.cell(row=row, column=c0, value=value)
+    cell.font = font
+    cell.alignment = align
+    cell.border = _BORDER_THIN
+    if fill is not None:
+        cell.fill = fill
+    if c1 > c0:
+        ws.merge_cells(start_row=row, start_column=c0, end_row=row, end_column=c1)
+    return cell
+
+
 def _write_week_block(
     ws,
     week_days: list[pd.Timestamp],
@@ -205,25 +259,15 @@ def _write_week_block(
     post_idx: dict,
     festiu_days: set[str],
     start_row: int,
+    n_sub: int = 1,
 ) -> int:
     """Escriu un bloc setmanal a `ws` amb el layout del PDF setmanal:
-    cada dia té sub-columnes (una per màquina), i les files són
+    TOTS els dies ocupen el mateix ample (`n_sub` subcolumnes) i les
+    màquines de cada dia es reparteixen el bloc; les files són
     [Header / Abs / Àrea / Màquina / Matí / Tarda / Nit]. Retorna la
     fila següent disponible després del bloc."""
     days_str = [d.strftime("%Y-%m-%d") for d in week_days]
-    # Files de màquina (sense revisió/guàrdia/sense facultatiu) per al
-    # bloc principal de franges.
-    week_df = schedule_df[schedule_df["day"].isin(days_str)].copy()
-    if "is_flipped" not in week_df.columns:
-        week_df["is_flipped"] = 0
-    week_df["_sid"] = week_df["slot_id"].astype(str).str.strip().str.upper()
-    week_df["_pid"] = week_df["professional"].astype(str).str.strip().str.upper()
-    week_df["_franja"] = week_df["franja"].astype(str).str.strip().str.upper()
-    week_df = week_df[
-        ~week_df["_sid"].isin(GUARDS_RESERVED_SLOT_IDS)
-        & ~week_df["_pid"].isin({"", "NONE", "NAN"})
-        & (week_df["_franja"].isin({"MATI", "TARDA", "NIT"}))
-    ].copy()
+    week_df = _prepared_week_df(schedule_df, days_str)
 
     # Slots de revisió (dia sencer): files separades sota les franges.
     review_rows = schedule_df[
@@ -233,16 +277,22 @@ def _write_week_block(
     ].copy()
 
     # Màquines per dia (només dies del bloc; festius queden sense
-    # màquines però mantenim la columna).
+    # màquines però mantenen el bloc sencer).
     machines_per_day = {d: _machines_for_day(week_df, d.strftime("%Y-%m-%d")) for d in week_days}
 
-    # Rang de columnes per dia (mínim 1 col, ampliada segons #màquines).
+    # Blocs de dia d'AMPLE FIX: cada dia ocupa exactament n_sub
+    # subcolumnes (com al PDF), independentment de quantes màquines
+    # tingui — així tots els dies queden alineats entre setmanes.
+    n_sub = max(1, int(n_sub), *(len(m) for m in machines_per_day.values()))
     day_ranges: dict = {}
+    machine_ranges: dict = {}
     col = 2  # col 1 = etiqueta de fila
     for d in week_days:
-        n = max(1, len(machines_per_day[d]))
-        day_ranges[d] = (col, col + n - 1)
-        col += n
+        day_ranges[d] = (col, col + n_sub - 1)
+        machine_ranges[d] = _machine_col_ranges(
+            col, n_sub, max(1, len(machines_per_day[d])),
+        )
+        col += n_sub
     total_cols = col - 1
     n_cols = total_cols  # per a estendre fills
 
@@ -269,13 +319,10 @@ def _write_week_block(
                 f"{p} ({'R' if _is_reforc(k) else 'G'})" for p, k in g
             )
             label = label + gtxt
-        cell = ws.cell(row=r, column=c0, value=label)
-        cell.fill = _FILL_HEADER
-        cell.font = _FONT_GUARD if g else _FONT_HEADER
-        cell.alignment = _ALIGN_CENTER
-        cell.border = _BORDER_THIN
-        if c1 > c0:
-            ws.merge_cells(start_row=r, start_column=c0, end_row=r, end_column=c1)
+        _merged_cell(
+            ws, r, c0, c1, label,
+            _FONT_GUARD if g else _FONT_HEADER, fill=_FILL_HEADER,
+        )
     r += 1
 
     # ── Row 2: absències (per dia, amb postguàrdia (PG)).
@@ -285,14 +332,10 @@ def _write_week_block(
         dstr = d.strftime("%Y-%m-%d")
         items = list(abs_idx.get(dstr, []))
         items += [f"{p} (PG)" for p in post_idx.get(dstr, [])]
-        cell = ws.cell(row=r, column=c0, value=" ".join(items))
-        cell.font = _FONT_DEFAULT
-        cell.alignment = _ALIGN_CENTER
-        cell.border = _BORDER_THIN
-        if dstr in festiu_days:
-            cell.fill = _FILL_FESTIU
-        if c1 > c0:
-            ws.merge_cells(start_row=r, start_column=c0, end_row=r, end_column=c1)
+        _merged_cell(
+            ws, r, c0, c1, " ".join(items), _FONT_DEFAULT,
+            fill=_FILL_FESTIU if dstr in festiu_days else None,
+        )
     r += 1
 
     # ── Row 3: ÀREA. Per a cada dia, fusiona màquines consecutives
@@ -302,79 +345,78 @@ def _write_week_block(
         c0, c1 = day_ranges[d]
         machines = machines_per_day[d]
         if not machines:
-            # Cel·la buida (festiu o dia sense màquines).
-            cell = ws.cell(row=r, column=c0, value="")
-            cell.border = _BORDER_THIN
-            if d.strftime("%Y-%m-%d") in festiu_days:
-                cell.fill = _FILL_FESTIU
+            # Bloc sencer buit (festiu o dia sense màquines).
+            _merged_cell(
+                ws, r, c0, c1, "", _FONT_DEFAULT,
+                fill=_FILL_FESTIU
+                if d.strftime("%Y-%m-%d") in festiu_days else None,
+            )
             continue
-        # Agrupa per àrea (consecutives).
+        # Agrupa per àrea (consecutives), sobre els rangs de màquina.
+        ranges = machine_ranges[d]
         i = 0
         while i < len(machines):
             cur_area = calendar_display_slot_area(machines[i])
             j = i
             while j < len(machines) and calendar_display_slot_area(machines[j]) == cur_area:
                 j += 1
-            cs = c0 + i
-            ce = c0 + j - 1
-            cell = ws.cell(row=r, column=cs, value=cur_area)
-            cell.fill = _area_fill(cur_area)
-            cell.font = _FONT_LABEL
-            cell.alignment = _ALIGN_CENTER
-            cell.border = _BORDER_THIN
-            if ce > cs:
-                ws.merge_cells(start_row=r, start_column=cs, end_row=r, end_column=ce)
+            _merged_cell(
+                ws, r, ranges[i][0], ranges[j - 1][1], cur_area,
+                _FONT_LABEL, fill=_area_fill(cur_area),
+            )
             i = j
     r += 1
 
-    # ── Row 4: MÀQUINA (una etiqueta per columna).
+    # ── Row 4: MÀQUINA (una etiqueta per màquina, sobre el seu rang).
     _set_label(r, "Màquina")
     for d in week_days:
-        c0, _c1 = day_ranges[d]
+        c0, c1 = day_ranges[d]
         machines = machines_per_day[d]
         dstr = d.strftime("%Y-%m-%d")
         if not machines:
-            cell = ws.cell(row=r, column=c0, value="")
-            cell.border = _BORDER_THIN
-            if dstr in festiu_days:
-                cell.fill = _FILL_FESTIU
+            _merged_cell(
+                ws, r, c0, c1, "", _FONT_DEFAULT,
+                fill=_FILL_FESTIU if dstr in festiu_days else None,
+            )
             continue
-        for i, m in enumerate(machines):
-            cell = ws.cell(row=r, column=c0 + i, value=m)
-            cell.font = _FONT_LABEL
-            cell.alignment = _ALIGN_CENTER
-            cell.border = _BORDER_THIN
-            cell.fill = _area_fill(calendar_display_slot_area(m))
+        for (ms, me), m in zip(machine_ranges[d], machines):
+            # Etiqueta COMPACTA (com al PDF): el sufix del lloc es treu
+            # — l'àrea ja surt a la fila de sobre (ECO1_LLOC → ECO1) —
+            # i el text va en VERTICAL perquè hi càpiga qualsevol nom.
+            _merged_cell(
+                ws, r, ms, me, calendar_display_compact_slot_label(m),
+                _FONT_LABEL,
+                fill=_area_fill(calendar_display_slot_area(m)),
+                align=_ALIGN_VERTICAL,
+            )
+    # Registrem la fila de Màquina: en fixar alçades li donarem més
+    # espai (els noms van en vertical, com la franja alta del PDF).
+    ws._machine_rows = getattr(ws, "_machine_rows", []) + [r]
     r += 1
 
     # ── Rows 5,6,7: Matí, Tarda, Nit. Una cel·la per (dia, màquina).
     for franja in ("MATI", "TARDA", "NIT"):
         _set_label(r, franja.title())
         for d in week_days:
-            c0, _c1 = day_ranges[d]
+            c0, c1 = day_ranges[d]
             dstr = d.strftime("%Y-%m-%d")
             machines = machines_per_day[d]
             if not machines:
-                cell = ws.cell(row=r, column=c0, value="")
-                cell.border = _BORDER_THIN
-                if dstr in festiu_days:
-                    cell.fill = _FILL_FESTIU
+                _merged_cell(
+                    ws, r, c0, c1, "", _FONT_DEFAULT,
+                    fill=_FILL_FESTIU if dstr in festiu_days else None,
+                )
                 continue
-            for i, m in enumerate(machines):
+            for (ms, me), m in zip(machine_ranges[d], machines):
                 rows = week_df[
                     (week_df["day"] == dstr)
                     & (week_df["_sid"] == m)
                     & (week_df["_franja"] == franja)
                 ]
                 text, font, fill = _cell_text_and_style(rows)
-                cell = ws.cell(row=r, column=c0 + i, value=text)
-                cell.font = font
-                cell.alignment = _ALIGN_CENTER
-                cell.border = _BORDER_THIN
                 if dstr in festiu_days and not text:
-                    cell.fill = _FILL_FESTIU
-                elif fill is not None:
-                    cell.fill = fill
+                    fill = _FILL_FESTIU
+                _merged_cell(ws, r, ms, me, text, font, fill=fill)
         r += 1
 
     # ── Revisions: una fila per slot de revisió. Span per dia
@@ -385,7 +427,7 @@ def _write_week_block(
         key=calendar_display_slot_sort_key,
     )
     for sid in review_slots:
-        _set_label(r, f"Rev. {sid}")
+        _set_label(r, f"Rev. {calendar_display_compact_slot_label(sid)}")
         for d in week_days:
             c0, c1 = day_ranges[d]
             dstr = d.strftime("%Y-%m-%d")
@@ -394,14 +436,9 @@ def _write_week_block(
                 & (review_rows["slot_id"].astype(str).str.strip().str.upper() == sid)
             ]
             text, font, fill = _cell_text_and_style(rev_rows)
-            cell = ws.cell(row=r, column=c0, value=text)
-            cell.font = font
-            cell.alignment = _ALIGN_CENTER
-            cell.border = _BORDER_THIN
             if dstr in festiu_days and not text:
-                cell.fill = _FILL_FESTIU
-            if c1 > c0:
-                ws.merge_cells(start_row=r, start_column=c0, end_row=r, end_column=c1)
+                fill = _FILL_FESTIU
+            _merged_cell(ws, r, c0, c1, text, font, fill=fill)
         r += 1
 
     # Track max cols per a freeze i autosize aproximat
@@ -424,46 +461,46 @@ def _non_working_days(year: int) -> set[str]:
     )
 
 
-def _write_calendari_grid(
-    writer,
-    schedule_df: pd.DataFrame,
+def _write_month_grid(
+    book,
+    sheet_name: str,
+    df: pd.DataFrame,
     year: int | None,
     months: list[int] | None,
+    guards_idx: dict,
+    abs_idx: dict,
+    post_idx: dict,
+    festiu_days: set[str],
+    index: int | None = None,
 ) -> None:
-    """Escriu la fulla «Calendari» com a quadrícula setmanal (mimica PDF)."""
-    if "Calendari" in writer.book.sheetnames:
-        del writer.book["Calendari"]
-    ws = writer.book.create_sheet("Calendari", 0)
+    """Escriu UNA fulla-quadrícula (un mes = una pàgina A4 apaïsada).
+    `df` ja ve filtrat al període de la fulla."""
+    if sheet_name in book.sheetnames:
+        del book[sheet_name]
+    ws = (
+        book.create_sheet(sheet_name, index)
+        if index is not None else book.create_sheet(sheet_name)
+    )
 
-    # Carrega dades operatives (per a Abs i Guàrdia a la capçalera)
-    guards_idx = _guard_index(year, months)
-    abs_idx = _abs_index(year, months)
-    post_idx = _post_guard_days(year) if year else {}
-    festiu_days = _non_working_days(year) if year else set()
+    # Conjunt de dilluns únics del període (les setmanes frontereres hi
+    # entren pels seus dies del mes; els dies d'altres mesos queden buits).
+    dfm = df.copy()
+    dfm["_monday"] = dfm["_day_dt"] - pd.to_timedelta(
+        dfm["_day_dt"].dt.weekday, unit="D"
+    )
+    mondays = sorted(set(dfm["_monday"].dt.normalize()))
 
-    # Determinar les setmanes del scope (mes natural: es deriven dels
-    # dilluns de les dades presents; els dies fora de mes queden buits).
-    df = schedule_df.copy()
-    df["day"] = df["day"].astype(str)
-    df["_day_dt"] = pd.to_datetime(df["day"], errors="coerce")
-    if year is not None and months:
-        from src.domain.month_scope import in_logical_months
-        df = df[in_logical_months(df["_day_dt"], year, months)]
-    df = df.dropna(subset=["_day_dt"]).copy()
-    if df.empty:
-        ws.cell(row=1, column=1, value="(sense assignacions per al scope)")
-        return
-
-    # Conjunt de dilluns únics al scope.
-    df["_monday"] = df["_day_dt"] - pd.to_timedelta(df["_day_dt"].dt.weekday, unit="D")
-    mondays = sorted(set(df["_monday"].dt.normalize()))
-
-    # Amplada de columnes: col 1 = etiqueta de fila (Abs/Àrea/Màquina/
-    # Matí/Tarda/Nit), cols 2+ = sub-columnes per (dia, màquina).
-    ws.column_dimensions["A"].width = 10
-    # Amplada per defecte de les sub-columnes (es pot ajustar més).
-    for i in range(1, 50):
-        ws.column_dimensions[get_column_letter(1 + i)].width = 9
+    # Pre-passada: nombre de subcolumnes per dia (el MÀXIM de màquines
+    # d'un dia en tot el full). Tots els dies ocupen aquest mateix ample
+    # (com al PDF) i les màquines de cada dia se'l reparteixen — així
+    # els dies queden alineats entre setmanes, festius inclosos.
+    n_sub = 1
+    for mon in mondays:
+        week_days = [mon + pd.Timedelta(days=k) for k in range(5)]
+        days_str = [d.strftime("%Y-%m-%d") for d in week_days]
+        wdf = _prepared_week_df(dfm, days_str)
+        for ds in days_str:
+            n_sub = max(n_sub, len(_machines_for_day(wdf, ds)))
 
     # Reservem la fila 1 per al títol; els blocs setmanals comencen a la 2.
     current_row = 2
@@ -471,20 +508,31 @@ def _write_calendari_grid(
         week_days = [mon + pd.Timedelta(days=k) for k in range(5)]
         # Salta setmanes sense cap assignació.
         days_str = {d.strftime("%Y-%m-%d") for d in week_days}
-        if not (df["day"].isin(days_str)).any():
+        if not (dfm["day"].isin(days_str)).any():
             continue
         current_row = _write_week_block(
             ws,
             week_days,
-            df,
+            dfm,
             guards_idx,
             abs_idx,
             post_idx,
             festiu_days,
             current_row,
+            n_sub=n_sub,
         )
 
     max_col = max(2, getattr(ws, "_pdf_like_max_col", 2))
+
+    # Amplada de columnes NOMÉS per a les realment usades: donar amplada
+    # a columnes buides (l'antic range(1, 50)) les incorporava a l'àrea
+    # d'impressió d'Excel i l'escala «ajusta a pàgina» quedava
+    # esguerrada. El bloc de cada dia té un ample total ~constant (les
+    # subcolumnes es fan més estretes com més màquines hi ha).
+    ws.column_dimensions["A"].width = 10
+    sub_width = min(15.0, max(3.5, round(45.0 / max(1, n_sub), 1)))
+    for i in range(2, max_col + 1):
+        ws.column_dimensions[get_column_letter(i)].width = sub_width
 
     # ── Títol (fila 1), fusionat sobre tota l'amplada del calendari.
     title = "Calendari entre setmana"
@@ -498,17 +546,35 @@ def _write_calendari_grid(
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
     ws.row_dimensions[1].height = 30
 
-    # Files de contingut més altes: amb el fit-to-page (escala uniforme),
-    # unes files més altes fan que el calendari OMPLI tota l'alçada de
-    # l'A4 apaïsat en lloc de quedar arraconat a dalt.
+    # Alçada de fila CALCULADA perquè la proporció del contingut
+    # coincideixi amb l'A4 APAÏSAT: l'ajusta-a-pàgina usa una escala
+    # uniforme, i si el full és proporcionalment més alt que ample
+    # (mesos amb moltes setmanes/files) queden marges laterals enormes;
+    # si és més ample, queda arraconat a dalt. Amplada en punts ≈
+    # cols × ample_caràcter (~5.25 pt/char); objectiu = àrea útil de
+    # l'A4 horitzontal (~11,1 × 7,5 polzades).
+    n_content_rows = max(1, current_row - 2)
+    machine_rows = set(getattr(ws, "_machine_rows", []))
+    # Les files de Màquina (noms en vertical) són ~2,4× més altes, com
+    # la franja de màquines del PDF; l'equació de proporció ho incorpora.
+    _MACH_FACTOR = 2.4
+    eff_rows = n_content_rows + (len(machine_rows) * (_MACH_FACTOR - 1))
+    width_pt = (10 + (max_col - 1) * sub_width) * 5.25
+    target_height_pt = width_pt * 7.5 / 11.1
+    row_h = min(34.0, max(10.0, (target_height_pt - 30) / eff_rows))
     for rr in range(2, current_row):
-        ws.row_dimensions[rr].height = 30
+        ws.row_dimensions[rr].height = (
+            row_h * _MACH_FACTOR if rr in machine_rows else row_h
+        )
 
     # Congela el títol i la columna d'etiquetes.
     ws.freeze_panes = "B2"
 
     # Impressió: HORITZONTAL (landscape) en A4, ajustada a UNA pàgina
-    # (amplada i alçada) i centrada perquè aprofiti tota la pàgina.
+    # (amplada i alçada), centrada, i amb l'ÀREA D'IMPRESSIÓ explícita
+    # (només les cel·les usades — res de columnes fantasma).
+    last_row = max(2, current_row - 1)
+    ws.print_area = f"A1:{get_column_letter(max_col)}{last_row}"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = 9  # A4
     ws.page_setup.fitToWidth = 1
@@ -519,6 +585,56 @@ def _write_calendari_grid(
     ws.page_margins = PageMargins(
         left=0.3, right=0.3, top=0.4, bottom=0.4, header=0.2, footer=0.2,
     )
+
+
+def _write_calendari_grid(
+    writer,
+    schedule_df: pd.DataFrame,
+    year: int | None,
+    months: list[int] | None,
+) -> None:
+    """Escriu la quadrícula setmanal (mimica PDF). Amb UN mes al scope,
+    una única fulla «Calendari»; amb diversos, UNA FULLA PER MES — cada
+    mes imprimeix en la seva pròpia pàgina A4 apaïsada (abans tot el
+    scope s'encabia en una sola pàgina i l'escala variava segons els
+    festius i les setmanes sense programació)."""
+    # Carrega dades operatives (per a Abs i Guàrdia a la capçalera)
+    guards_idx = _guard_index(year, months)
+    abs_idx = _abs_index(year, months)
+    post_idx = _post_guard_days(year) if year else {}
+    festiu_days = _non_working_days(year) if year else set()
+
+    df = schedule_df.copy()
+    df["day"] = df["day"].astype(str)
+    df["_day_dt"] = pd.to_datetime(df["day"], errors="coerce")
+    if year is not None and months:
+        from src.domain.month_scope import in_logical_months
+        df = df[in_logical_months(df["_day_dt"], year, months)]
+    df = df.dropna(subset=["_day_dt"]).copy()
+    if df.empty:
+        ws = writer.book.create_sheet("Calendari", 0)
+        ws.cell(row=1, column=1, value="(sense assignacions per al scope)")
+        return
+
+    month_list = sorted({int(m) for m in months}) if (year and months) else []
+    if len(month_list) > 1:
+        from src.domain.month_scope import catalan_month_name, in_logical_months
+        idx = 0
+        for m in month_list:
+            sub = df[in_logical_months(df["_day_dt"], year, [m])].copy()
+            if sub.empty:
+                continue
+            _write_month_grid(
+                writer.book, f"Calendari {catalan_month_name(m)}", sub,
+                year, [m], guards_idx, abs_idx, post_idx, festiu_days,
+                index=idx,
+            )
+            idx += 1
+    else:
+        _write_month_grid(
+            writer.book, "Calendari", df, year, months,
+            guards_idx, abs_idx, post_idx, festiu_days, index=0,
+        )
 
 
 def _register_catalog_overrides() -> None:

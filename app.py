@@ -881,10 +881,15 @@ with data_tab2:
         warn_guards_vs_initial(guards_path)
 
     with altres_subtab:
-        # Totes s'apliquen quan cliques Generar a Calendari. Ordenades per
-        # JERARQUIA: primer les que el solver NO pot infringir mai (dures),
-        # després les que respecta si pot (toves) i al final la configuració.
-        st.markdown("##### 🔒 Restriccions dures (es compleixen sempre)")
+        # Totes s'apliquen quan cliques Generar a Calendari. TOTES són
+        # TOVES, ordenades de MÉS a MENYS pes: el solver les respecta en
+        # aquest ordre de prioritat i només infringeix una si la
+        # cobertura del calendari ho fa estrictament impossible — cap
+        # xoc entre elles pot deixar el solver sense solució.
+        st.markdown(
+            "##### ⚖️ Restriccions (de més a menys pes — el solver les "
+            "respecta en aquest ordre sempre que el calendari ho permet)"
+        )
         render_fixed_machines_editor(slot_catalog_path, all_professional_options)
         with st.expander("Canvi d'activitat (manual)", expanded=False):
             st.caption(
@@ -904,13 +909,6 @@ with data_tab2:
                 professionals_path,
                 eligibility_path,
             )
-        with st.expander("Peonades/mes (jornada completa)", expanded=False):
-            render_peonada_cap_editor()
-
-        st.markdown("##### ⚖️ Restriccions toves (es respecten si el calendari ho permet)")
-        with st.expander("Roda d'assignació (torns rotatoris)", expanded=False):
-            from src.ui.wheel_editor import render_wheel_editor
-            render_wheel_editor(existing_slots, professional_options)
         with st.expander("Elegibilitat per activitat", expanded=False):
             st.caption(
                 "Defineix quins facultatius poden cobrir cada activitat "
@@ -940,6 +938,9 @@ with data_tab2:
                 professionals_path, eligibility_path,
             )
             warn_pres_weekday_vs_initial(professionals_path)
+        with st.expander("Roda d'assignació (torns rotatoris)", expanded=False):
+            from src.ui.wheel_editor import render_wheel_editor
+            render_wheel_editor(existing_slots, professional_options)
         with st.expander("Comitès", expanded=False):
             render_comite_editor(
                 professional_options=professional_options,
@@ -948,6 +949,8 @@ with data_tab2:
             )
 
         st.markdown("##### ⚙️ Configuració")
+        with st.expander("Peonades/mes (jornada completa)", expanded=False):
+            render_peonada_cap_editor()
         with st.expander("Màquines que es doblen per facultatiu", expanded=False):
             render_doubled_machines_section(
                 professionals_path,
@@ -982,25 +985,10 @@ with weekday_calendar_tab:
     )
     # (Els comptadors per facultatiu s'han mogut a la pestanya «Mètriques
     # i canvis finals», dins un desplegable.)
-    # Ajustos ràpids sota el render. Absència/guàrdia escriuen a dades i es
-    # resolen amb «Reajustar (mínims canvis)»: el solver cobreix el forat
-    # conservant al màxim el calendari actual (no recomença de zero). Canvi
-    # puntual i ordinària↔peonada editen el calendari directament (a l'instant).
-    def _quick_reajustar(label: str) -> None:
-        """Reajust amb mínims canvis després d'afegir una absència/guàrdia:
-        parteix del calendari actual (estabilitat soft) i només mou el
-        necessari per cobrir el forat."""
-        from src.ui.planning_calendar_tabs import run_weekday_regenerate
-        run_weekday_regenerate(
-            label,
-            year, scope_start_month, scope_end_month, selected_months,
-            public_holidays_path, base_calendar_overrides_path,
-            base_calendar_path, session_dir, month,
-            save_generated_session_folder,
-            PDF_OUTPUT_DIR, professionals_path,
-        )
-        st.rerun()
-
+    # Ajustos ràpids sota el render — TOTS sense solver: absència/guàrdia
+    # es registren a dades i buiden les caselles afectades a l'instant;
+    # canvi puntual, peonada i presencialitat editen el calendari
+    # directament. El solver només ho considera en tornar a «Generar».
     render_quick_add_panels(
         year,
         month,
@@ -1011,7 +999,6 @@ with weekday_calendar_tab:
         PDF_OUTPUT_DIR,
         absences_path,
         guards_path,
-        reajustar=_quick_reajustar,
     )
 
 with final_metrics_tab:
