@@ -331,39 +331,14 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
             )
         ]
 
-    # Bloqueigs derivats de `allowed_areas` per facultatiu: si XX té
-    # allowed_areas="ZONA_A;ZONA_B", afegim allowed=0 a la taula
-    # d'eligibility per a tots els slots fora d'aquestes àrees.
-    # `allowed_areas` PREVAL sobre l'eligibility per defecte: si la
-    # parella (prof, slot) està bloquejada per àrea, queda allowed=0
-    # encara que l'eligibility de l'usuari digui el contrari.
-    from src.services.allowed_areas import allowed_areas_eligibility_blocks
-    extra_elig = allowed_areas_eligibility_blocks(common["professionals"])
-    base_elig = common["eligibility"].copy() if common.get("eligibility") is not None else pd.DataFrame(
-        columns=["professional_id", "slot_id", "allowed"]
+    # NOTA: l'antiga restriccio `allowed_areas` (llocs on treballa
+    # cada facultatiu) s'ha eliminat: era redundant amb l'ELEGIBILITAT
+    # — de fet es traduia a files allowed=0 d'aquesta mateixa taula.
+    effective_eligibility = (
+        common["eligibility"].copy()
+        if common.get("eligibility") is not None
+        else pd.DataFrame(columns=["professional_id", "slot_id", "allowed"])
     )
-    if not extra_elig.empty:
-        # extra_elig PRIMER → keep="first" manté allowed=0 sobre
-        # els valors de base_elig per a les mateixes (prof, slot).
-        merged = pd.concat([extra_elig, base_elig], ignore_index=True)
-        merged = merged.drop_duplicates(
-            subset=["professional_id", "slot_id"], keep="first"
-        ).reset_index(drop=True)
-        effective_eligibility = merged
-    else:
-        effective_eligibility = base_elig
-
-    # `allowed_areas` és un límit FÍSIC (el facultatiu no es desplaça a
-    # aquell lloc): a diferència de l'eligibility soft, és HARD. Passem
-    # el conjunt (prof, slot_id) a bloquejar al solver. El slot passa per
-    # `normalize_slot` (espais/guions → '_'): les claus del solver (sk[2])
-    # estan normalitzades així i sense això un slot amb espai al nom mai
-    # es bloquejaria.
-    from src.core.utils import normalize_slot as _norm_slot
-    allowed_areas_hard_blocks = {
-        (str(r.professional_id).strip().upper(), _norm_slot(r.slot_id))
-        for r in extra_elig.itertuples(index=False)
-    } if not extra_elig.empty else set()
 
     # Reduccions: derivades de non_working_weekdays (MON-FRI).
     # Cada dia setmanal no laborable = 20% reducció sobre la setmana laboral.
@@ -404,8 +379,6 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
         # secundari) — unió del catàleg (legacy) i del template (font
         # actual). El filtre s'aplica a `_add_peonada_monthly_cap`.
         "slot_secondary_ids": _slot_linked_ids_for_solver(common),
-        # Bloqueigs HARD per allowed_areas (prof, slot_id).
-        "allowed_areas_hard_blocks": allowed_areas_hard_blocks,
         # Warm-start opcional: calendari anterior per sembrar el solver
         # (hints, sense penalització) i millorar-lo en lloc de recomençar.
         "warm_start_assignments": warm_start_assignments,

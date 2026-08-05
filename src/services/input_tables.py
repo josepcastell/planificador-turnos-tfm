@@ -45,27 +45,6 @@ def _coerce_doubled_machines_column(series_or_value) -> pd.Series | str:
 PRESENCE_MODE_VALUES = ("", "PRESENCIAL", "NO_PRESENCIAL")
 
 
-def _coerce_areas_column(series_or_value):
-    """Normalitza un valor de `allowed_areas` ("ZONA_A;ZONA_B") a string
-    sorted en MAJÚSCULES."""
-    def _norm(value) -> str:
-        if value is None or (isinstance(value, float) and pd.isna(value)):
-            return ""
-        if isinstance(value, (list, tuple, set)):
-            items = value
-        else:
-            items = str(value).split(";")
-        cleaned = sorted({
-            str(item).strip().upper()
-            for item in items
-            if str(item).strip() and str(item).strip().lower() not in {"nan", "none", "na"}
-        })
-        return ";".join(cleaned)
-    if isinstance(series_or_value, pd.Series):
-        return series_or_value.fillna("").astype(str).apply(_norm)
-    return _norm(series_or_value)
-
-
 def _coerce_presence_mode_column(series: pd.Series) -> pd.Series:
     """Normalitza presence_mode a {'', 'PRESENCIAL', 'NO_PRESENCIAL'}.
     Buit = el facultatiu pot fer les dues presencialitats."""
@@ -94,8 +73,6 @@ def save_professionals(df: pd.DataFrame, professionals_path: Path, eligibility_p
         out["fallback"] = 0
     if "presence_mode" not in out.columns:
         out["presence_mode"] = ""
-    if "allowed_areas" not in out.columns:
-        out["allowed_areas"] = ""
     out["professional_id"] = out["professional_id"].fillna("").astype(str).str.strip().str.upper()
     out["name"] = out["name"].fillna("").astype(str).str.strip()
     out["non_working_weekdays"] = _coerce_weekdays_column(out["non_working_weekdays"])
@@ -103,7 +80,6 @@ def save_professionals(df: pd.DataFrame, professionals_path: Path, eligibility_p
     out["pres_weekdays"] = _coerce_weekdays_column(out["pres_weekdays"])
     out["fallback"] = pd.to_numeric(out["fallback"], errors="coerce").fillna(0).astype(int).clip(0, 1)
     out["presence_mode"] = _coerce_presence_mode_column(out["presence_mode"])
-    out["allowed_areas"] = _coerce_areas_column(out["allowed_areas"])
     out = out[out["professional_id"] != ""].copy()
     out = out.drop_duplicates(subset=["professional_id"], keep="last")
 
@@ -114,7 +90,6 @@ def save_professionals(df: pd.DataFrame, professionals_path: Path, eligibility_p
                 "doubled_machines": "", "non_working_weekdays": "",
                 "no_pres_weekdays": "", "pres_weekdays": "",
                 "fallback": 0, "presence_mode": "",
-                "allowed_areas": "",
             }])],
             ignore_index=True,
         )
@@ -123,8 +98,7 @@ def save_professionals(df: pd.DataFrame, professionals_path: Path, eligibility_p
     save_table(
         professionals_path, out,
         ["professional_id", "name", "doubled_machines", "non_working_weekdays",
-         "no_pres_weekdays", "pres_weekdays", "fallback", "presence_mode",
-         "allowed_areas"],
+         "no_pres_weekdays", "pres_weekdays", "fallback", "presence_mode"],
     )
 
     professionals = set(out["professional_id"])

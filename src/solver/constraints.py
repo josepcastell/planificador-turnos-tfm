@@ -161,18 +161,27 @@ def _build_machine_term_specs(keys_by_day, review_slots, links_by_wf=None):
     return specs
 
 
-def _collect_machine_terms_for_day(model, x, p, day, day_spec, prefix, pres_flip=None):
+def _collect_machine_terms_for_day(model, x, p, day, day_spec, prefix,
+                                   pres_flip=None, np_flip=None):
     """Return (machine_terms, presential_machine_terms) for one professional+day.
 
     Cada BLOC vinculat que aplica aquell dia compta com una sola màquina
     (variable pròpia per bloc — dos blocs el mateix dia compten 2), i com a
     presencial només si algun membre del bloc és PRESENCIAL. PEONADA i
-    slots de revisió queden exclosos. Un slot NO_PRESENCIAL ordinari
-    "flipat" (pres_flip[(p,sk)]==1) compta com a presencial.
+    slots de revisió queden exclosos.
+
+    FLIPS (les dues direccions, per arribar al target presencial):
+      · `pres_flip[(p,sk)]==1` → un NO_PRESENCIAL ordinari compta com a
+        PRESENCIAL (el facultatiu ve encara que la màquina sigui remota).
+      · `np_flip[(p,sk)]==1` → un PRESENCIAL ordinari deixa de comptar
+        com a presencial (es fa en remot). Es resta del comptador.
+    Els blocs vinculats queden fora del flip NP (el bloc sencer és una
+    unitat física; flipar-ne un membre seria incoherent).
     """
     (coupling_groups, machine_keys,
      presential_machine_keys, flippable_machine_keys) = day_spec
     pres_flip = pres_flip or {}
+    np_flip = np_flip or {}
     machine_terms = []
     presential_machine_terms = []
 
@@ -186,7 +195,9 @@ def _collect_machine_terms_for_day(model, x, p, day, day_spec, prefix, pres_flip
     for sk in machine_keys:
         machine_terms.append(x[p, sk])
     for sk in presential_machine_keys:
-        presential_machine_terms.append(x[p, sk])
+        nf = np_flip.get((p, sk))
+        # `x - nf` ≥ 0 sempre (nf ≤ x), així els comptadors no baixen de 0.
+        presential_machine_terms.append(x[p, sk] if nf is None else x[p, sk] - nf)
     for sk in flippable_machine_keys:
         fv = pres_flip.get((p, sk))
         if fv is not None:
@@ -637,13 +648,20 @@ def _add_review_continuity(model, x, professionals, keys_by_day, slot_rows, work
 def _add_flip_target_cap(model, x, pres_flip, quota_hard_professionals, unique_days,
                          unique_weeks, week_map, working_map, absent_days_by_prof,
                          capacity_pct_by, machine_specs, planning_rules=None,
-                         weekly_pres_targets=None):
-    """Hard: els 'flips' (no-presencial ordinari comptat com a presencial)
-    NOMÉS poden omplir fins al target presencial setmanal del facultatiu,
-    mai per sobre. Els presencials FIXOS forçats per cobertura sí que
-    poden superar-lo (com fins ara, amb penalització tova). Per setmana:
-    fix + flips <= target + max(0, fix - target)."""
-    if not pres_flip:
+                         weekly_pres_targets=None, np_flip=None):
+    """Hard: els 'flips' només poden acostar el comptador presencial al
+    target, mai allunyar-l'en. Per període (setmana o mes):
+
+      · PUJADA (pres_flip, NP→PRES): fix + flips <= target + max(0, fix−target)
+        — s'omple fins al target, mai per sobre.
+      · BAIXADA (np_flip, PRES→NP): sum(np_flips) <= max(0, fix−target)
+        — només es pot treure l'EXCÉS per sobre del target, mai baixar-ne.
+
+    Els presencials FIXOS forçats per cobertura poden superar el target
+    (amb penalització tova). `np_flip` només arriba ple des de core quan
+    el mode d'equilibri defineix un target presencial real."""
+    np_flip = np_flip or {}
+    if not pres_flip and not np_flip:
         return
     rules = planning_rules if planning_rules is not None else PlanningRules.defaults()
     days_by_week: dict = {}
@@ -658,7 +676,7 @@ def _add_flip_target_cap(model, x, pres_flip, quota_hard_professionals, unique_d
             ]
             if not active_days:
                 continue
-            fixed_terms, flip_terms = [], []
+            fixed_terms, flip_terms, np_terms = [], [], []
             for day in active_days:
                 spec = machine_specs.get(day)
                 if not spec:
@@ -668,7 +686,10 @@ def _add_flip_target_cap(model, x, pres_flip, quota_hard_professionals, unique_d
                 flip_terms.extend(
                     pres_flip[(p, sk)] for sk in flippable_keys if (p, sk) in pres_flip
                 )
-            if not flip_terms:
+                np_terms.extend(
+                    np_flip[(p, sk)] for sk in presential_keys if (p, sk) in np_flip
+                )
+            if not flip_terms and not np_terms:
                 continue
             eff_days = (sum(capacity_pct_by[(p, d)] for d in active_days) + 99) // 100
             if weekly_pres_targets is not None:
@@ -683,4 +704,9 @@ def _add_flip_target_cap(model, x, pres_flip, quota_hard_professionals, unique_d
             model.Add(fixed_total == (sum(fixed_terms) if fixed_terms else 0))
             over_fixed = model.NewIntVar(0, n_f, f"flipcap_overfix_{p}_{yw}")
             model.AddMaxEquality(over_fixed, [fixed_total - target, 0])
-            model.Add(fixed_total + sum(flip_terms) <= target + over_fixed)
+            if flip_terms:
+                model.Add(fixed_total + sum(flip_terms) <= target + over_fixed)
+            if np_terms:
+                # Simètric: només es pot convertir a NP l'excés per sobre
+                # del target (si ja s'hi és o per sota, cap conversió).
+                model.Add(sum(np_terms) <= over_fixed)

@@ -102,11 +102,11 @@ SOLVER_WEIGHTS = {
     # de més pes de totes — abans era dura i un xoc de fixos deixava el
     # model INFEASIBLE; ara es viola el mínim imprescindible.
     "fixed_assignment_violation": 40_000_000,
-    # Llocs on treballa cada facultatiu (allowed_areas): per sota dels
-    # fixos, per sobre de l'elegibilitat.
-    "allowed_area_violation": 20_000_000,
     # Elegibilitat: TOVA però amb pes molt alt (només cedeix si no hi ha
-    # cap altra opció possible; mai supera la cobertura dura).
+    # cap altra opció possible; mai supera la cobertura dura). També
+    # cobreix el cas «aquest facultatiu no va a aquell lloc»: es marca
+    # allowed=0 per a les activitats d'aquell lloc (l'antiga restricció
+    # `allowed_areas` era exactament això i s'ha eliminat).
     "eligibility_penalty": 10_000_000,
     # Dies de la setmana exclusivament no-presencials (per facultatiu).
     # TOVA però amb pes molt alt: el solver evita assignar slots PRES
@@ -122,13 +122,13 @@ SOLVER_WEIGHTS = {
     # 1 — preservar els canvis puntuals que fa l'usuari (en reajustar,
     #     mínim de canvis respecte al pla anterior).
     "stability": 5_000_000,
-    # 2 — franges presencials: assolir el target presencial setmanal.
-    # Pes alt — per sobre dels spreads (PRES i ORDINÀRIES, ~1M cadascun):
-    # els targets es respecten ABANS que el solver intenti l'equilibri.
-    # Si dos repartiments compleixen el target, el spread escolleix el
-    # més equitatiu.
+    # 2 — REGLES D'EQUILIBRI: assolir el target presencial (setmanal o
+    # mensual segons el mode). Va just DESPRÉS de l'elegibilitat (10M) i
+    # per sobre dels dies NP/PRES per facultatiu (6M), la roda (5M) i els
+    # comitès: si el repartiment de càrrega xoca amb una preferència de
+    # dies, mana el repartiment.
     # NOTA: l'overage presencial reutilitza aquest mateix pes a core.py.
-    "weekly_presential_shortfall": 3_000_000,
+    "weekly_presential_shortfall": 8_000_000,
     # 3 — acostar-se als targets de dies presencials i no-presencials:
     #     editables a Mètriques (per setmana) + planning_rules (màquines).
     "weekly_overage": 500_000,

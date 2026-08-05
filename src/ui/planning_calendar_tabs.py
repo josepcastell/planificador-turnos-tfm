@@ -410,14 +410,15 @@ def render_weekday_planning_tab(
             st.warning(
                 "Les regles d'equilibri estan en mode «activitat» però no "
                 "hi ha cap activitat triada: en generar no s'aplicarà cap "
-                "equilibri per activitat. Tria-la a Restriccions › Regles "
-                "d'equilibri."
+                "equilibri per activitat. Tria-la a Restriccions › Altres "
+                "restriccions › Regles d'equilibri de la càrrega."
             )
         elif _rules_gen.balance_activity not in _act_opts:
             st.warning(
                 f"L'activitat de l'equilibri «{_rules_gen.balance_activity}» "
                 "ja no és al catàleg: l'equilibri per activitat no tindrà "
-                "efecte. Revisa Restriccions › Regles d'equilibri."
+                "efecte. Revisa Restriccions › Altres restriccions › Regles "
+                "d'equilibri de la càrrega."
             )
     gen_btn_col, exp_general_col, exp_byprof_col, gen_progress_col = st.columns(
         [1, 1, 1, 2]

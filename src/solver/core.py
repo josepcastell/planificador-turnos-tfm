@@ -578,10 +578,11 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
     #      peonades/mes.
     #
     # TOVES (per pes, de més a menys — vegeu SOLVER_WEIGHTS):
-    #   40M màquines fixes + canvis manuals · 20M llocs per facultatiu ·
-    #   10M elegibilitat · 6M dies NP/PRES per facultatiu · 5M estabilitat ·
-    #   5M roda d'assignació · 3M/500k targets d'equilibri (setmanals o
-    #   mensuals) · trams 3-4 equitat (PRES i ordinàries) · 100k ús de TLD ·
+    #   40M màquines fixes + canvis manuals · 10M elegibilitat (inclou
+    #   «no va a aquell lloc»: allowed=0 a les activitats del lloc) ·
+    #   8M targets de les REGLES D'EQUILIBRI · 6M dies NP/PRES per
+    #   facultatiu · 5M estabilitat · 5M roda d'assignació · 500k target
+    #   NP (tram 2) · trams 3-4 equitat (PRES i ordinàries) · 100k TLD ·
     #   50k comitè-màquina mateixa àrea · 40k teletreball matí de guàrdia ·
     #   20k repartiment de revisions · 10k balanç TC/RM.
     _add_coverage_constraints(
@@ -599,25 +600,10 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
                                   unlimited_professionals=fallback_professionals,
                                   pres_flip=pres_flip)
     _add_unavailability_constraints(model, x, slot_keys, unavailability_df, keys_by_day=keys_by_day)
-    # TOVA amb pes molt alt: allowed_areas (llocs on treballa cada
-    # facultatiu). Penalitza assignar (prof, slot) fora dels seus llocs;
-    # per sobre de l'elegibilitat però per sota dels fixos — només cedeix
-    # si la cobertura dura no deixa cap altra opció (mai INFEASIBLE).
-    _allowed_areas_blocks = data.get("allowed_areas_hard_blocks") or set()
-    _allowed_area_viol_terms = []
-    if _allowed_areas_blocks:
-        for sk in slot_keys:
-            sid = str(sk[2]).strip().upper()
-            for p in professionals:
-                if (str(p).strip().upper(), sid) in _allowed_areas_blocks and (p, sk) in x:
-                    _allowed_area_viol_terms.append(x[p, sk])
-    total_allowed_area_violation = model.NewIntVar(
-        0, max(1, len(_allowed_area_viol_terms)), "total_allowed_area_violation"
-    )
-    model.Add(
-        total_allowed_area_violation
-        == (sum(_allowed_area_viol_terms) if _allowed_area_viol_terms else 0)
-    )
+    # NOTA: la restricció «llocs on treballa cada facultatiu»
+    # (allowed_areas) s'ha eliminat — era redundant amb l'ELEGIBILITAT
+    # (de fet es traduïa a files allowed=0 de la mateixa taula). Qui
+    # vulgui limitar algú a un lloc concret, ho fa des d'Elegibilitat.
     total_eligibility_penalty = _add_eligibility_soft(
         model, x, professionals, slot_keys, eligibility_df,
         fallback_professionals=fallback_professionals,
@@ -709,11 +695,48 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
         _weekly_pres_targets = {(p, "MES"): t for p, t in _monthly_t.items()}
     elif _rules_mode != "personalitzat":
         _weekly_pres_targets = {}
+
+    # ── Flip INVERS (PRES→NP) ────────────────────────────────────────────
+    # Simètric al pres_flip: un PRESENCIAL ordinari pot deixar de comptar
+    # com a presencial (es fa en remot) per BAIXAR fins al target de qui
+    # en té massa. Només es crea quan el mode d'equilibri fixa un target
+    # presencial real — als modes total/none/mensual_total/activitat el
+    # target és 0 com a sentinella de «cap objectiu presencial» i una
+    # baixada lliure no tindria sentit. Exclou els slots FIXATS per
+    # l'usuari, les peonades i qui té presence_mode=PRESENCIAL.
+    #
+    # DECISIÓ: el flip NP NO relaxa la compatibilitat diària (màx. 1
+    # presencial/dia). Una màquina presencial feta en remot segueix
+    # ocupant el dia del facultatiu; així el flip només canvia com
+    # COMPTA a les regles d'equilibri, mai quantes màquines pot dur.
+    # El cap d'`_add_flip_target_cap` ja el fa auto-limitat: només es
+    # pot convertir l'excés per sobre del target, mai gratuïtament.
+    np_flip: dict = {}
+    if _rules_mode in ("presencial", "mensual_presencial", "personalitzat"):
+        np_flippable_keys = sorted(
+            sk for sk in {sk for sp in machine_specs.values() for sk in sp[2]}
+            if sk not in fixed_slot_keys and str(sk[4]).upper() == "NORMAL"
+        )
+        for p in professionals:
+            if p == "NONE" or presence_mode_by_prof.get(p) == "PRESENCIAL":
+                continue
+            for sk in np_flippable_keys:
+                if (p, sk) in x:
+                    day, franja, slot_id, presentiality, work_mode, position = sk
+                    name = (
+                        f"npflip_{p}_{day}_{franja}_{slot_id}_{presentiality}"
+                        f"_{work_mode}_{position}"
+                        .replace("-", "_").replace(" ", "_")
+                    )
+                    nv = model.NewBoolVar(name)
+                    model.Add(nv <= x[p, sk])
+                    np_flip[(p, sk)] = nv
+
     _add_flip_target_cap(
         model, x, pres_flip, quota_hard_professionals, unique_days,
         _flip_periods, _flip_period_map, working_map, absent_days_by_prof,
         capacity_pct_by, machine_specs, planning_rules=planning_rules,
-        weekly_pres_targets=_weekly_pres_targets,
+        weekly_pres_targets=_weekly_pres_targets, np_flip=np_flip,
     )
     presential_tolerance = max(0, int(data.get("presential_tolerance", 0) or 0))
 
@@ -773,6 +796,7 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
         planning_rules=planning_rules, machine_specs=machine_specs, pres_flip=pres_flip,
         presential_tolerance=presential_tolerance,
         peonada_vars=peonada_vars, eligibility_df=eligibility_df,
+        np_flip=np_flip,
     )
     # Excloem del balanç de presencialitats els facultatius que mai poden
     # fer presencials: presence_mode=NO_PRESENCIAL (p.ex. comodí TLD) i
@@ -791,6 +815,7 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
      _cum_pres_target_by_p) = _add_presentiality_balance(
         model, x, active_for_presential, professionals, slot_keys, slot_rows,
         effective_capacity_pct, pres_flip=pres_flip, flippable_keys=flippable_keys,
+        np_flip=np_flip,
         slot_links=slot_links, prior_presential_counts=prior_pres,
         review_slots=review_slots,
     )
@@ -915,22 +940,20 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
     W = SOLVER_WEIGHTS
     tier_terms = [
         ("presencial", [
-            # Ex-dures, ara TOVES amb els pesos més alts de tots: fixos
-            # (màquines fixes + canvis manuals) i llocs per facultatiu.
+            # Ex-dura, ara TOVA amb el pes més alt de tots: els fixos
+            # (màquines fixes per facultatiu + canvis manuals).
             (total_fixed_assignment_miss, W["fixed_assignment_violation"]),
-            (total_allowed_area_violation, W["allowed_area_violation"]),
             (total_eligibility_penalty, W["eligibility_penalty"]),
-            # Dies NP-only per facultatiu (soft, pes alt): penalitza
-            # cada PRES assignat al facultatiu en un dia de la setmana
-            # marcat com a no-presencial.
+            # Regles d'equilibri (shortfall + overage sobre el target PRES
+            # EXACTE): just DESPRÉS de l'elegibilitat i per sobre dels
+            # dies NP/PRES, la roda i els comitès.
+            (total_weekly_presential_shortfall, W["weekly_presential_shortfall"]),
+            (total_weekly_presential_overage, W["weekly_presential_shortfall"]),
+            # Dies NP-only per facultatiu (soft): penalitza cada PRES
+            # assignat al facultatiu en un dia marcat com a no-presencial.
             (total_no_pres_weekday_violation, W["no_pres_weekday_violation"]),
             # Dies PRES-only per facultatiu (simètric): penalitza NP.
             (total_pres_weekday_violation, W["pres_weekday_violation"]),
-            # Shortfall + overage: PRES target EXACTE. Si calendari >
-            # suma targets, overage > 0 (cobertura HARD ho permet); si
-            # calendari < suma targets, shortfall > 0.
-            (total_weekly_presential_shortfall, W["weekly_presential_shortfall"]),
-            (total_weekly_presential_overage, W["weekly_presential_shortfall"]),
         ]),
         ("no_presencial", [
             # Shortfall: sobre np_incl (compta peonades) → convertir NP en
@@ -1072,6 +1095,7 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
         spread_review_rm, max_review_rm, min_review_rm,
         total_family_imbalance, average_capacity_pct,
         pres_flip=pres_flip,
+        np_flip=np_flip,
         pres_dev_linf=pres_dev_linf,
         peonada_vars=peonada_vars,
         effective_capacity_pct=effective_capacity_pct,

@@ -24,7 +24,6 @@ from src.ui.eligibility_editor import render_eligibility_editor
 from src.ui.holiday_editor import render_holidays_editor
 from src.ui.input_editors import (
     render_absences_editor,
-    render_allowed_areas_editor,
     render_comite_editor,
     render_doubled_machines_section,
     render_guards_editor,
@@ -775,7 +774,6 @@ with professionals_tab:
 with data_tab2:
     (
         franges_subtab,
-        equilibri_subtab,
         festius_subtab,
         absences_subtab,
         guards_subtab,
@@ -783,7 +781,6 @@ with data_tab2:
     ) = st.tabs(
         [
             "Franges de treball",
-            "Regles d'equilibri setmanal",
             "Festius",
             "Absències",
             "Guàrdies",
@@ -848,8 +845,6 @@ with data_tab2:
                 template_overrides_path,
                 invalidate_after_work_slot_change,
             )
-    with equilibri_subtab:
-        render_planning_rules_editor(Path("data/planning_rules.csv"))
     with festius_subtab:
         render_holidays_editor(
             year,
@@ -904,16 +899,13 @@ with data_tab2:
                 professional_options=professional_options,
                 all_professional_options=all_professional_options,
             )
-        with st.expander("Llocs on treballa cada facultatiu", expanded=False):
-            render_allowed_areas_editor(
-                professionals_path,
-                eligibility_path,
-            )
         with st.expander("Elegibilitat per activitat", expanded=False):
             st.caption(
                 "Defineix quins facultatius poden cobrir cada activitat "
                 "(`allowed=0` bloqueja, `allowed=1` permet). Aplica al "
-                "calendari inicial i al definitiu."
+                "calendari inicial i al definitiu. **També serveix per "
+                "limitar algú a un lloc concret**: n'hi ha prou amb "
+                "bloquejar-li les activitats dels altres llocs."
             )
             render_eligibility_editor(
                 eligibility_path,
@@ -941,6 +933,15 @@ with data_tab2:
         with st.expander("Roda d'assignació (torns rotatoris)", expanded=False):
             from src.ui.wheel_editor import render_wheel_editor
             render_wheel_editor(existing_slots, professional_options)
+        with st.expander("Regles d'equilibri de la càrrega", expanded=False):
+            st.caption(
+                "**Quantes** màquines o presencials toquen a cadascú "
+                "(repartides segons la jornada). És diferent dels **dies "
+                "NP/PRES** de sobre, que fixen **quins dies** ve cada "
+                "facultatiu: per això pesen més que l'equilibri — si xoquen, "
+                "mana la preferència personal."
+            )
+            render_planning_rules_editor(Path("data/planning_rules.csv"))
         with st.expander("Comitès", expanded=False):
             render_comite_editor(
                 professional_options=professional_options,

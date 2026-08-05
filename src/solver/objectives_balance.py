@@ -192,19 +192,35 @@ def _add_count_balance(model, x, active_professionals, professionals, slot_keys,
 def _add_presentiality_balance(model, x, active_professionals, professionals, slot_keys,
                                slot_rows, average_capacity_pct, pres_flip=None,
                                flippable_keys=None, slot_links=None,
-                               prior_presential_counts=None, review_slots=None):
+                               prior_presential_counts=None, review_slots=None,
+                               np_flip=None):
     """Equilibri de PRESENCIALITATS per facultatiu actiu. Vegeu
-    `_add_count_balance` per al detall. Inclou els flips PRES com a
-    comptador addicional perquè ara muten el schedule final (visibles
-    a la UI com a PRES). EXCLOU les revisions (no compten com a
+    `_add_count_balance` per al detall. Inclou els flips de les DUES
+    direccions perquè muten el schedule final i el comptador de l'equitat
+    ha de coincidir amb el que veu l'usuari: els PRES flips sumen i els
+    NP flips (PRES→NP) resten. EXCLOU les revisions (no compten com a
     presencial al balanç ni al target)."""
     pres_flip = pres_flip or {}
+    np_flip = np_flip or {}
     flippable_keys = flippable_keys or []
+    # Els slots d'un bloc VINCULAT es col·lapsen al comptador (OR del
+    # bloc): restar-hi un flip NP podria baixar del zero i infactibilitzar.
+    # Es deixen fora de la resta (tampoc són np-flipables a `core`).
+    linked_slot_ids = set()
+    for a, b in (slot_links or []):
+        linked_slot_ids.add(str(a).strip().upper())
+        linked_slot_ids.add(str(b).strip().upper())
+    np_by_prof: dict = {}
+    for (pp, sk), nf in np_flip.items():
+        if str(sk[2]).strip().upper() in linked_slot_ids:
+            continue
+        np_by_prof.setdefault(pp, []).append(nf)
     extra: dict = {}
     for p in professionals:
-        flips_p = [pres_flip[(p, sk)] for sk in flippable_keys if (p, sk) in pres_flip]
-        if flips_p:
-            extra[p] = flips_p
+        terms_p = [pres_flip[(p, sk)] for sk in flippable_keys if (p, sk) in pres_flip]
+        terms_p += [-nf for nf in np_by_prof.get(p, [])]
+        if terms_p:
+            extra[p] = terms_p
     return _add_count_balance(
         model, x, active_professionals, professionals, slot_keys,
         average_capacity_pct, slot_links=slot_links,

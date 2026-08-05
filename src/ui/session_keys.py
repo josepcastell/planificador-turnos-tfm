@@ -93,7 +93,6 @@ TAB_SESSION_KEYS: dict[str, tuple[str, ...]] = {
 # sessió, l'estat vell del widget GUANYA sobre el valor llegit del disc de
 # la sessió nova i s'hi autodesa — contaminació creuada entre sessions.
 SESSION_SCOPED_KEY_PREFIXES: tuple[str, ...] = (
-    "allowed_areas_picker_",
     "slot_doubled_picker_",
     "absences_offdays_picker_",
     "no_pres_weekdays_picker_",

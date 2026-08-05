@@ -12,8 +12,9 @@ def _extract_solution(solver, x, professionals, real_professionals, active_profe
                       spread_review_rm, max_review_rm, min_review_rm,
                       total_family_imbalance, average_capacity_pct, pres_flip=None,
                       pres_dev_linf=None, peonada_vars=None,
-                      effective_capacity_pct=None):
+                      effective_capacity_pct=None, np_flip=None):
     pres_flip = pres_flip or {}
+    np_flip = np_flip or {}
     peonada_vars = peonada_vars or {}
     effective_capacity_pct = effective_capacity_pct or {}
     lines = ["Solució trobada:", ""]
@@ -49,6 +50,14 @@ def _extract_solution(solver, x, professionals, real_professionals, active_profe
             if fv is not None and solver.Value(fv) == 1:
                 presentiality = "PRESENCIAL"
                 is_flipped = 1
+                flips.append((professional, str(row.day), str(row.slot_id)))
+            # Flip INVERS (PRES→NP): una màquina presencial que el solver
+            # ha convertit en remota per baixar fins al target presencial.
+            # is_flipped=-1 perquè la UI la pugui distingir del cas PRES.
+            nf = np_flip.get((professional, sk))
+            if nf is not None and solver.Value(nf) == 1:
+                presentiality = "NO_PRESENCIAL"
+                is_flipped = -1
                 flips.append((professional, str(row.day), str(row.slot_id)))
             # NOU MODEL DE PEONADES: work_mode a la sortida ja no surt del
             # template (que el solver ignora). Es deriva del booleà

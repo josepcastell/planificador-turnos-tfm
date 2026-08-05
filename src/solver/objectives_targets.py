@@ -193,7 +193,8 @@ def monthly_auto_targets(kind, quota_hard_professionals, unique_days,
 def _add_monthly_soft_terms(model, x, quota_hard_professionals, unique_days,
                             working_map, absent_days_by_prof, keys_by_day,
                             capacity_pct_by, specs, mode, rules, pres_flip,
-                            presential_tolerance, eligibility_df=None):
+                            presential_tolerance, eligibility_df=None,
+                            np_flip=None):
     """Objectiu tou MENSUAL: tot el període del solve (un mes) es tracta
     com un ÚNIC bloc — la càrrega real del mes es reparteix entre els
     facultatius proporcionalment a la seva capacitat mensual, sense cap
@@ -340,7 +341,7 @@ def _add_monthly_soft_terms(model, x, quota_hard_professionals, unique_days,
             for d in adays:
                 mt, pmt = _collect_machine_terms_for_day(
                     model, x, p, d, specs[d], "soft_month_assign",
-                    pres_flip=pres_flip,
+                    pres_flip=pres_flip, np_flip=np_flip,
                 )
                 count_terms.extend(
                     pmt if mode == "mensual_presencial" else mt
@@ -407,7 +408,7 @@ def _add_monthly_soft_terms(model, x, quota_hard_professionals, unique_days,
         for d in active_days_by_prof[p]:
             mt, _pmt = _collect_machine_terms_for_day(
                 model, x, p, d, rest_specs[d], "soft_month_rest",
-                pres_flip=pres_flip,
+                pres_flip=pres_flip, np_flip=np_flip,
             )
             count_terms.extend(mt)
         target = rest_targets.get(p, 0)
@@ -440,7 +441,7 @@ def _add_monthly_soft_terms(model, x, quota_hard_professionals, unique_days,
 def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, unique_weeks,
                            week_map, working_map, absent_days_by_prof, keys_by_day,
                            capacity_pct_by, review_slots, planning_rules=None,
-                           machine_specs=None, pres_flip=None,
+                           machine_specs=None, pres_flip=None, np_flip=None,
                            presential_tolerance: int = 0,
                            peonada_vars=None, eligibility_df=None):
     """Objectiu tou per setmana × facultatiu: acostar PRES i NP_ord al
@@ -485,6 +486,7 @@ def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, uniq
             model, x, quota_hard_professionals, unique_days,
             working_map, absent_days_by_prof, keys_by_day, capacity_pct_by,
             specs, mode, rules, pres_flip, presential_tolerance,
+            np_flip=np_flip,
             eligibility_df=eligibility_df,
         )
 
@@ -534,7 +536,8 @@ def _add_weekly_soft_terms(model, x, quota_hard_professionals, unique_days, uniq
             presential_terms = []
             for day in active_days:
                 mt, pmt = _collect_machine_terms_for_day(
-                    model, x, p, day, specs[day], "soft_week_assign", pres_flip=pres_flip
+                    model, x, p, day, specs[day], "soft_week_assign",
+                    pres_flip=pres_flip, np_flip=np_flip,
                 )
                 machine_terms.extend(mt)
                 presential_terms.extend(pmt)

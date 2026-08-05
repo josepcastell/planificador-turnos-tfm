@@ -17,7 +17,7 @@ CSV_HEADERS: dict[str, str] = {
     # Dades mestres
     "data/professionals.csv":
         "professional_id,name,doubled_machines,non_working_weekdays,"
-        "no_pres_weekdays,pres_weekdays,fallback,presence_mode,allowed_areas\n",
+        "no_pres_weekdays,pres_weekdays,fallback,presence_mode\n",
     "data/eligibility.csv": "professional_id,slot_id,allowed\n",
     "data/slot_catalog.csv":
         "slot_id,weekday,weekend,linked_to,doubled,review,area,"
