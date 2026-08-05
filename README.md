@@ -41,10 +41,15 @@ instalación ni permisos de administrador) a partir del código.
 
 ### Descargar el portable ya construido (doble clic)
 
-Si no quieres instalar nada, descarga el empaquetado portable desde la pestaña
-[**Releases**](https://github.com/josepcastell/planificador-turnos-tfm/releases):
-descomprime `Planner_portable.zip` y haz doble clic en `run.bat`. Se entrega sin
-datos; la configuración se introduce desde la propia interfaz.
+Si no quieres instalar nada, descarga el empaquetado portable desde este
+**enlace único y permanente**, que sirve siempre la última versión publicada:
+
+[**Descargar Planner_portable.zip**](https://github.com/josepcastell/planificador-turnos-tfm/releases/latest/download/Planner_portable.zip)
+
+Descomprime el archivo y haz doble clic en `run.bat`. Se entrega sin datos; la
+configuración se introduce desde la propia interfaz. Una vez instalado, el
+botón **Actualizar** de la barra lateral descarga por sí solo las versiones
+siguientes: no hace falta volver a este enlace.
 
 ## Estructura del código
 
