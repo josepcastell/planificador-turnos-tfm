@@ -349,6 +349,12 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
     review_for_solver = {
         s for s in review_set if str(s).strip().upper() not in review_fixed
     }
+    # Activitats obligatòriament presencials, normalitzades igual que les
+    # claus del solver (espais/guions → '_').
+    from src.core.utils import normalize_slot as _norm_ap
+    always_pres_for_solver = {
+        _norm_ap(s) for s in (common.get("always_presential_slots") or set())
+    }
 
     # Mapa de dies NP-only per facultatiu (per al penal tou
     # `_add_no_pres_weekday_soft`): expandeix els codis MON..SUN als
@@ -383,6 +389,9 @@ def solve_weekday(common: dict, weekday: dict, guard_preassignments=None,
         # (hints, sense penalització) i millorar-lo en lloc de recomençar.
         "warm_start_assignments": warm_start_assignments,
         "review_slots": review_for_solver,
+        # Activitats obligatòriament presencials (catàleg): el solver no
+        # les pot passar a no-presencials per quadrar l'equilibri.
+        "always_presential_slots": always_pres_for_solver,
         "presential_tolerance": common.get("presential_tolerance", 0),
         "peonada_cap": common.get("peonada_cap", 3),
         "prior_presential_counts": prior_presential_counts or {},

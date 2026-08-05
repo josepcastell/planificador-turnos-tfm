@@ -56,6 +56,56 @@ class TestNpFlipCounting:
         assert solver.Value(total) == 1
 
 
+class TestAlwaysPresential:
+    """Activitats marcades «Sempre presencial» al catàleg: el solver no
+    les pot convertir en no-presencials (queden fora del flip PRES→NP)."""
+
+    def test_flagged_slots_detected(self):
+        import pandas as pd
+        from src.services.slot_catalog import always_presential_slot_ids
+        cat = pd.DataFrame([
+            {"slot_id": "ECO_A", "always_presential": 1},
+            {"slot_id": "TC_A", "always_presential": 0},
+            {"slot_id": "RM_A", "always_presential": ""},
+        ])
+        assert always_presential_slot_ids(cat) == {"ECO_A"}
+
+    def test_missing_column_is_empty(self):
+        import pandas as pd
+        from src.services.slot_catalog import always_presential_slot_ids
+        assert always_presential_slot_ids(pd.DataFrame([{"slot_id": "A"}])) == set()
+        assert always_presential_slot_ids(None) == set()
+
+    def test_catalog_roundtrip_keeps_flag(self, tmp_path):
+        import pandas as pd
+        from src.services.slot_catalog import (
+            always_presential_slot_ids, load_slot_catalog, save_slot_catalog,
+        )
+        p = tmp_path / "slot_catalog.csv"
+        save_slot_catalog(p, pd.DataFrame([
+            {"slot_id": "ECO_A", "weekday": True, "always_presential": 1},
+            {"slot_id": "TC_A", "weekday": True, "always_presential": 0},
+        ]))
+        assert always_presential_slot_ids(load_slot_catalog(p)) == {"ECO_A"}
+
+    def test_legacy_catalog_without_column_loads(self, tmp_path):
+        # Catàleg d'una versió anterior: la columna no hi és i s'ha de
+        # sintetitzar a 0 sense petar.
+        import pandas as pd
+        from src.services.slot_catalog import (
+            always_presential_slot_ids, load_slot_catalog,
+        )
+        p = tmp_path / "slot_catalog.csv"
+        pd.DataFrame([
+            {"slot_id": "ECO_A", "weekday": 1, "weekend": 0, "linked_to": "",
+             "doubled": 0, "review": 0, "area": "", "metric_family": "",
+             "assignee": "", "notes": ""},
+        ]).to_csv(p, index=False, encoding="utf-8-sig")
+        cat = load_slot_catalog(p)
+        assert "always_presential" in cat.columns
+        assert always_presential_slot_ids(cat) == set()
+
+
 class TestNpFlipCap:
     """El cap DUR: només es pot convertir a NP l'excés per sobre del
     target presencial del període (mai baixar-ne)."""

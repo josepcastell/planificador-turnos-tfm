@@ -930,9 +930,11 @@ with data_tab2:
                 professionals_path, eligibility_path,
             )
             warn_pres_weekday_vs_initial(professionals_path)
-        with st.expander("Roda d'assignació (torns rotatoris)", expanded=False):
-            from src.ui.wheel_editor import render_wheel_editor
-            render_wheel_editor(existing_slots, professional_options)
+        with st.expander("Activitats sempre presencials", expanded=False):
+            from src.ui.always_presential_editor import (
+                render_always_presential_editor,
+            )
+            render_always_presential_editor(slot_catalog_path)
         with st.expander("Regles d'equilibri de la càrrega", expanded=False):
             st.caption(
                 "**Quantes** màquines o presencials toquen a cadascú "
@@ -942,6 +944,9 @@ with data_tab2:
                 "mana la preferència personal."
             )
             render_planning_rules_editor(Path("data/planning_rules.csv"))
+        with st.expander("Roda d'assignació (torns rotatoris)", expanded=False):
+            from src.ui.wheel_editor import render_wheel_editor
+            render_wheel_editor(existing_slots, professional_options)
         with st.expander("Comitès", expanded=False):
             render_comite_editor(
                 professional_options=professional_options,

@@ -3,7 +3,16 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.domain.constants import WEEKDAY_CODES
+from src.domain.constants import WEEKDAY_CODES, WEEKDAY_LABELS
+
+
+def _weekday_label(code: str) -> str:
+    """«MONDAY» → «Dilluns». Els selectors mostren el nom en català; el
+    valor que es desa segueix sent el codi."""
+    try:
+        return WEEKDAY_LABELS[WEEKDAY_CODES.index(str(code).strip().upper())]
+    except (ValueError, IndexError):
+        return str(code)
 from src.services.comite import COMITE_COLUMNS, load_comite_assignments, save_comite_assignments
 from src.services.input_tables import (
     normalize_doubled_machines,
@@ -340,6 +349,7 @@ def render_comite_editor(
         with cols_form[4]:
             qa_weekday = st.selectbox(
                 "dia setmana", options=[""] + WEEKDAY_CODES, index=0,
+                format_func=lambda c: _weekday_label(c) if c else "—",
                 label_visibility="collapsed",
             )
         with cols_form[5]:
@@ -704,6 +714,7 @@ def _render_weekday_picker_block(
                 options=WEEKDAY_CODES,
                 default=current,
                 key=f"{key_prefix}_{pid}",
+                format_func=_weekday_label,
                 label_visibility="collapsed",
                 placeholder=placeholder,
             )

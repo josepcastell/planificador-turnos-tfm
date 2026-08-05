@@ -77,7 +77,10 @@ def render_slot_catalog_editor(
     _cat_src["linked_to"] = (
         _cat_src.get("linked_to", "").fillna("").astype(str).str.strip().str.upper()
     )
-    _view_cols = ["slot_id", "metric_family", "area", "review"]
+    _cat_src["always_presential"] = pd.to_numeric(
+        _cat_src.get("always_presential", 0), errors="coerce"
+    ).fillna(0).astype(bool)
+    _view_cols = ["slot_id", "metric_family", "area", "review", "always_presential"]
     _view_df = _cat_src[_view_cols].copy().reset_index(drop=True)
 
     # Selecció de la fila per pre-omplir el formulari.
@@ -224,6 +227,9 @@ def render_slot_catalog_editor(
                     # templates. El valor existent al catàleg queda
                     # com a legacy (no s'usa pel solver nou).
                     existing.loc[_mask, "review"] = int(bool(qa_review))
+                    # `always_presential` NO es toca aquí: s'edita a
+                    # Restriccions › Altres restriccions › «Activitats
+                    # sempre presencials» (punt d'edició únic).
                     # CASCADE RENAME: si l'slot canvia de nom, propaguem
                     # la nova etiqueta a tots els llocs que el referencien
                     # perque la resta de caracteristiques (vinculacions,
@@ -356,6 +362,7 @@ def render_slot_catalog_editor(
                             "linked_to": _linked_final,
                             "doubled": 0,
                             "review": int(bool(qa_review)),
+                            "always_presential": 0,
                             "area": _area_final,
                             "metric_family": _family_final,
                             "notes": "",
@@ -393,6 +400,11 @@ def render_slot_catalog_editor(
                 "Revisió",
                 help="Slot de revisió: dia sencer, no compta per a la quota "
                 "setmanal i màx. 1 per facultatiu i dia.",
+            ),
+            "always_presential": st.column_config.CheckboxColumn(
+                "Sempre presencial",
+                help="El solver no pot convertir aquesta activitat en "
+                "no-presencial per quadrar les regles d'equilibri.",
             ),
         },
     )

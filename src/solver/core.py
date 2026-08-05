@@ -580,8 +580,8 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
     # TOVES (per pes, de més a menys — vegeu SOLVER_WEIGHTS):
     #   40M màquines fixes + canvis manuals · 10M elegibilitat (inclou
     #   «no va a aquell lloc»: allowed=0 a les activitats del lloc) ·
-    #   8M targets de les REGLES D'EQUILIBRI · 6M dies NP/PRES per
-    #   facultatiu · 5M estabilitat · 5M roda d'assignació · 500k target
+    #   8M dies NP/PRES per facultatiu · 6M targets de les REGLES
+    #   D'EQUILIBRI · 5M estabilitat · 5M roda d'assignació · 500k target
     #   NP (tram 2) · trams 3-4 equitat (PRES i ordinàries) · 100k TLD ·
     #   50k comitè-màquina mateixa àrea · 40k teletreball matí de guàrdia ·
     #   20k repartiment de revisions · 10k balanç TC/RM.
@@ -713,9 +713,16 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
     # pot convertir l'excés per sobre del target, mai gratuïtament.
     np_flip: dict = {}
     if _rules_mode in ("presencial", "mensual_presencial", "personalitzat"):
+        # Activitats marcades al catàleg com a OBLIGATÒRIAMENT PRESENCIALS:
+        # mai es converteixen en remotes (l'usuari ho ha dit explícitament).
+        _always_pres = {
+            str(s).strip().upper()
+            for s in (data.get("always_presential_slots") or set())
+        }
         np_flippable_keys = sorted(
             sk for sk in {sk for sp in machine_specs.values() for sk in sp[2]}
             if sk not in fixed_slot_keys and str(sk[4]).upper() == "NORMAL"
+            and str(sk[2]).strip().upper() not in _always_pres
         )
         for p in professionals:
             if p == "NONE" or presence_mode_by_prof.get(p) == "PRESENCIAL":
@@ -944,16 +951,16 @@ def build_and_solve_demo(data: dict, stability_assignments=None):
             # (màquines fixes per facultatiu + canvis manuals).
             (total_fixed_assignment_miss, W["fixed_assignment_violation"]),
             (total_eligibility_penalty, W["eligibility_penalty"]),
-            # Regles d'equilibri (shortfall + overage sobre el target PRES
-            # EXACTE): just DESPRÉS de l'elegibilitat i per sobre dels
-            # dies NP/PRES, la roda i els comitès.
-            (total_weekly_presential_shortfall, W["weekly_presential_shortfall"]),
-            (total_weekly_presential_overage, W["weekly_presential_shortfall"]),
             # Dies NP-only per facultatiu (soft): penalitza cada PRES
             # assignat al facultatiu en un dia marcat com a no-presencial.
             (total_no_pres_weekday_violation, W["no_pres_weekday_violation"]),
             # Dies PRES-only per facultatiu (simètric): penalitza NP.
             (total_pres_weekday_violation, W["pres_weekday_violation"]),
+            # Regles d'equilibri (shortfall + overage sobre el target PRES
+            # EXACTE): després dels compromisos de dia de cada facultatiu
+            # i per sobre de la roda i els comitès.
+            (total_weekly_presential_shortfall, W["weekly_presential_shortfall"]),
+            (total_weekly_presential_overage, W["weekly_presential_shortfall"]),
         ]),
         ("no_presencial", [
             # Shortfall: sobre np_incl (compta peonades) → convertir NP en

@@ -45,6 +45,7 @@ RESTRICCIONS: tuple[str, ...] = (
     "planning_rules_editor_nonce",
     "planning_rules_mode",
     "planning_rules_balance_activity",
+    "always_presential_picker",
 )
 
 # ── Generar i revisar ─────────────────────────────────────────────────────

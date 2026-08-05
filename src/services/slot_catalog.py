@@ -29,7 +29,8 @@ WEEKEND_TEMPLATE_COLUMNS = [
 
 SLOT_CATALOG_COLUMNS = [
     "slot_id", "weekday", "weekend", "linked_to", "doubled",
-    "review", "area", "metric_family", "assignee", "notes",
+    "review", "always_presential", "area", "metric_family",
+    "assignee", "notes",
 ]
 # NOTA: la columna `rotation` s'ha eliminat del catàleg. No tenia cap
 # efecte real al solver (la funció `rotation_slot_ids` no es cridava).
@@ -97,6 +98,23 @@ def review_slot_ids(catalog_df) -> set:
         return set()
     ids = catalog_df["slot_id"].fillna("").astype(str).str.strip().str.upper()
     flag = _pd.to_numeric(catalog_df["review"], errors="coerce").fillna(0).astype(int)
+    return set(ids[flag == 1]) - {""}
+
+
+def always_presential_slot_ids(catalog_df) -> set:
+    """Slots marcats al catàleg com a OBLIGATÒRIAMENT PRESENCIALS
+    (columna `always_presential=1`): el solver no els pot convertir en
+    no-presencials per quadrar les regles d'equilibri (queden fora del
+    flip PRES→NP). Si la columna no hi és, el conjunt és buit."""
+    import pandas as _pd
+    if catalog_df is None or catalog_df.empty or "slot_id" not in catalog_df.columns:
+        return set()
+    if "always_presential" not in catalog_df.columns:
+        return set()
+    ids = catalog_df["slot_id"].fillna("").astype(str).str.strip().str.upper()
+    flag = _pd.to_numeric(
+        catalog_df["always_presential"], errors="coerce"
+    ).fillna(0).astype(int)
     return set(ids[flag == 1]) - {""}
 
 
@@ -407,6 +425,9 @@ def load_slot_catalog(path: Path) -> pd.DataFrame:
     df["linked_to"] = df["linked_to"].fillna("").astype(str).str.strip().str.upper()
     df["doubled"] = _coerce_doubled(df["doubled"])
     df["review"] = pd.to_numeric(df["review"], errors="coerce").fillna(0).astype(int).clip(0, 1)
+    df["always_presential"] = pd.to_numeric(
+        df["always_presential"], errors="coerce"
+    ).fillna(0).astype(int).clip(0, 1)
     # Localització i família admeten qualsevol valor (etiquetes lliures); el
     # solver només interpreta TC/RM per a l'equilibri de famílies, la resta
     # passen com a etiqueta descriptiva sense efecte funcional.
@@ -431,6 +452,9 @@ def save_slot_catalog(path: Path, df: pd.DataFrame) -> None:
     out["linked_to"] = out["linked_to"].fillna("").astype(str).str.strip().str.upper()
     out["doubled"] = pd.to_numeric(out["doubled"], errors="coerce").fillna(0).astype(int).clip(0, 2)
     out["review"] = pd.to_numeric(out["review"], errors="coerce").fillna(0).astype(int).clip(0, 1)
+    out["always_presential"] = pd.to_numeric(
+        out["always_presential"], errors="coerce"
+    ).fillna(0).astype(int).clip(0, 1)
     out["area"] = out["area"].fillna("").astype(str).str.strip().str.upper()
     out["metric_family"] = out["metric_family"].fillna("").astype(str).str.strip().str.upper()
     out["assignee"] = out["assignee"].fillna("").astype(str).str.strip().str.upper()

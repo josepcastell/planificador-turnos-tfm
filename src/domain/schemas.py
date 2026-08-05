@@ -20,8 +20,8 @@ CSV_HEADERS: dict[str, str] = {
         "no_pres_weekdays,pres_weekdays,fallback,presence_mode\n",
     "data/eligibility.csv": "professional_id,slot_id,allowed\n",
     "data/slot_catalog.csv":
-        "slot_id,weekday,weekend,linked_to,doubled,review,area,"
-        "metric_family,assignee,notes\n",
+        "slot_id,weekday,weekend,linked_to,doubled,review,always_presential,"
+        "area,metric_family,assignee,notes\n",
     "data/weekday/weekly_slot_templates.csv":
         "weekday_name,franja,slot_id,presentiality,work_mode,required_staff,"
         "is_active,doubled,linked_to,week_interval,week_offset\n",

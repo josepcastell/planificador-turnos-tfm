@@ -112,23 +112,24 @@ SOLVER_WEIGHTS = {
     # TOVA però amb pes molt alt: el solver evita assignar slots PRES
     # al facultatiu en aquells dies, però pot infringir si és estrictament
     # necessari per cobrir el calendari. Les revisions queden fora (no
-    # compten com a presencial ordinari). Pes 6M: per sobre del target
-    # PRES setmanal (3M) i de l'stability (5M), per sota d'elegibilitat (10M).
-    "no_pres_weekday_violation": 6_000_000,
+    # compten com a presencial ordinari). Pes 8M: per sobre de les regles
+    # d'equilibri (6M) — un compromís de dia d'un facultatiu mana sobre el
+    # repartiment de càrrega — i per sota d'elegibilitat (10M).
+    "no_pres_weekday_violation": 8_000_000,
     # Dies de la setmana exclusivament presencials (per facultatiu). Mateix
     # pes i lògica que el cas simètric: penalitza NP en aquests dies,
     # revisions excloses.
-    "pres_weekday_violation": 6_000_000,
+    "pres_weekday_violation": 8_000_000,
     # 1 — preservar els canvis puntuals que fa l'usuari (en reajustar,
     #     mínim de canvis respecte al pla anterior).
     "stability": 5_000_000,
     # 2 — REGLES D'EQUILIBRI: assolir el target presencial (setmanal o
-    # mensual segons el mode). Va just DESPRÉS de l'elegibilitat (10M) i
-    # per sobre dels dies NP/PRES per facultatiu (6M), la roda (5M) i els
-    # comitès: si el repartiment de càrrega xoca amb una preferència de
-    # dies, mana el repartiment.
+    # mensual segons el mode). Va DESPRÉS de l'elegibilitat (10M) i dels
+    # dies NP/PRES per facultatiu (8M), i per sobre de la roda (5M) i els
+    # comitès: si el repartiment de càrrega xoca amb un dia que un
+    # facultatiu té marcat, mana el compromís personal del dia.
     # NOTA: l'overage presencial reutilitza aquest mateix pes a core.py.
-    "weekly_presential_shortfall": 8_000_000,
+    "weekly_presential_shortfall": 6_000_000,
     # 3 — acostar-se als targets de dies presencials i no-presencials:
     #     editables a Mètriques (per setmana) + planning_rules (màquines).
     "weekly_overage": 500_000,

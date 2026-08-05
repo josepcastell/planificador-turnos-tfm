@@ -36,6 +36,7 @@ def load_common_data(base_dir: str = "data") -> dict:
 
     from src.services.comite import load_comite_assignments
     from src.services.slot_catalog import (
+        always_presential_slot_ids,
         fixed_assignments_from_catalog,
         load_slot_catalog,
         review_slot_ids,
@@ -73,6 +74,9 @@ def load_common_data(base_dir: str = "data") -> dict:
         "slot_secondary_ids": slot_secondary_ids(slot_catalog_df),
         "slot_fixed_assignments": fixed_assignments_from_catalog(slot_catalog_df),
         "review_slots": review_slot_ids(slot_catalog_df),
+        # Activitats que el solver NO pot convertir en no-presencials
+        # (queden fora del flip PRES→NP de les regles d'equilibri).
+        "always_presential_slots": always_presential_slot_ids(slot_catalog_df),
     }
 
 
