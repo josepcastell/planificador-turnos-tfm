@@ -42,11 +42,19 @@ PRESENTIALITY_ORDER = {"PRESENCIAL": 0, "NO_PRESENCIAL": 1}
 
 METRIC_TARGET_CALENDARS = ["Entre setmana"]
 
+# Fitxers de CONFIGURACIÓ que hereta una sessió NOVA de l'anterior. No
+# depenen de l'any (els anuals — festius, calendari base — es generen de
+# nou). Les màquines fixes, les rodes i les llistes de màquines/llocs hi
+# van perquè, sense elles, una sessió nova obliga a reintroduir-ho tot.
 CARRY_FORWARD_SESSION_FILES = [
     Path("data/professionals.csv"),
     Path("data/eligibility.csv"),
     Path("data/slot_catalog.csv"),
+    Path("data/maquines.csv"),
+    Path("data/llocs.csv"),
     Path("data/weekday/weekly_slot_templates.csv"),
+    Path("data/weekday/fixed_machines.csv"),
+    Path("data/weekday/wheel_slots.csv"),
     Path("data/absences/assignments.csv"),
     Path("data/comite/assignments.csv"),
     Path("data/weekday/unavailability.csv"),

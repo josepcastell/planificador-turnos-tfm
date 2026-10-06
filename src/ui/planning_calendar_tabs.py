@@ -526,7 +526,10 @@ def render_weekday_planning_tab(
             _src = src_dir / f"general_calendar_{year}_{_m:02d}.pdf"
             if _src.exists() and _src.stat().st_size > 0:
                 _name = catalan_month_name(_m)
-                _dest = f"calendari {_name}.pdf" if _name else _src.name
+                # L'ANY va al nom: ara una mateixa sessió conté diversos
+                # anys i, sense ell, l'octubre del 2027 sobreescriuria el
+                # del 2026 a la carpeta de destí.
+                _dest = f"calendari {_name} {year}.pdf" if _name else _src.name
                 shutil.copyfile(_src, pdf_save_dir / _dest)
                 copied.append(_dest)
         if copied:
@@ -555,7 +558,10 @@ def render_weekday_planning_tab(
     if export_excel_requested and _ensure_pdf_save_dir():
         from src.domain.month_scope import catalan_months_label
         from src.services.excel_export import export_schedule_to_excel
-        _label = catalan_months_label(selected_months) or str(year)
+        _label = catalan_months_label(selected_months)
+        # Amb l'any: una mateixa sessió conté diversos anys i el fitxer
+        # d'un any no ha de trepitjar el d'un altre.
+        _label = f"{_label} {year}" if _label else str(year)
         _xlsx_path = pdf_save_dir / f"calendari {_label}.xlsx"
         try:
             n_rows = export_schedule_to_excel(

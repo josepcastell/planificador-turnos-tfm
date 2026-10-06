@@ -41,6 +41,7 @@ from src.ui.planning_calendar_tabs import (
 from src.ui.planning_scope_controls import (
     render_weekday_scope_controls,
     weekday_scope_values,
+    weekday_scope_year,
 )
 from src.ui.session_sidebar import render_session_sidebar_actions
 from src.ui.update_panel import render_update_panel
@@ -214,6 +215,15 @@ def load_session_folder(session_dir: Path, year: int, month: int) -> int:
     return session_store.load_session_folder(session_dir, year, month, PDF_OUTPUT_DIR)
 
 
+def mark_workspace_year(year_value: int) -> None:
+    """Deixa constància de quin ANY té el workspace que hi ha al disc.
+
+    `sync_workspace_to_loaded_session` ho fa servir per desar la feina sota
+    l'any correcte, així que només s'ha d'avançar quan el workspace s'acaba
+    de carregar de debò per a aquell any — mai abans."""
+    st.session_state["scope_year"] = int(year_value)
+
+
 def sync_workspace_to_loaded_session() -> None:
     """Desa el workspace a la sessió CARREGADA actualment (la que es deixa)
     abans de substituir-lo per una altra sessió o de resetejar-lo. Sense
@@ -228,8 +238,14 @@ def sync_workspace_to_loaded_session() -> None:
         return
     meta = session_store.read_session_metadata(prev_dir)
     _, name_year = infer_section_year_from_session_name(prev_dir.name)
+    # L'ÀMBIT mana: el nom de la carpeta ja no porta l'any i session.txt
+    # només s'actualitza en Generar/Desar, així que tots dos poden anar
+    # endarrerits. Sense això, treballar un any nou i canviar de sessió
+    # sense generar desaria els fitxers de l'any VELL i es perdria la feina.
     try:
-        prev_year = int(meta.get("year", name_year))
+        prev_year = int(
+            st.session_state.get("scope_year", meta.get("year", name_year))
+        )
     except (TypeError, ValueError):
         prev_year = name_year
     try:
@@ -283,6 +299,14 @@ if _migrated_n:
         f"S'han recuperat {_migrated_n} sessió(ns) de la ubicació antiga.",
         icon="📦",
     )
+# L'any ja no forma part de la sessió (és un àmbit, com el mes): les
+# carpetes «{secció}_{any}» passen a dir-se «{secció}» i contenen tots
+# els anys. Vegeu `migrate_year_suffixed_sessions`.
+_renamed = session_store.migrate_year_suffixed_sessions(
+    DEFAULT_SESSION_ROOT, LAST_SESSION_PATH,
+)
+for _old, _new in _renamed:
+    st.toast(f"Sessió «{_old}» → «{_new}» (l'any ara és un àmbit)", icon="📅")
 session_folders = session_store.list_session_folders(DEFAULT_SESSION_ROOT)
 session_options = [p.name for p in session_folders]
 last_session_name = read_last_session_name()
@@ -313,15 +337,21 @@ section_name = st.sidebar.text_input(
     help="Canviar el títol REANOMENA la sessió actual (no en crea cap de "
          "nova). Per començar una sessió nova, fes servir «➕ Nova sessió».",
 )
-year = st.sidebar.number_input("Any", min_value=2020, max_value=2100, value=initial_year, step=1)
+# L'ANY ja no és a la barra lateral: es tria al desplegable «Àmbit del
+# calendari», junt amb el mes/trimestre. Aquí només se'n llegeix el valor
+# (el widget es dibuixa més avall; Streamlit rellança en canviar-lo).
+year = weekday_scope_year(initial_year)
 safe_section_name = "".join(
     c if c.isalnum() or c in {"_", "-"} else "_"
     for c in section_name.strip()
 ).strip("_") or "Seccio"
-default_session_dir = DEFAULT_SESSION_ROOT / f"{safe_section_name}_{year}"
+# La sessió és de la SECCIÓ, no de l'any: una mateixa sessió conté tots
+# els anys (els fitxers anuals ja porten l'any al nom). Abans la carpeta
+# era «{secció}_{any}» i canviar d'any obria una sessió buida.
+default_session_dir = DEFAULT_SESSION_ROOT / safe_section_name
 default_session_name = default_session_dir.name
 selected_session = ""
-session_identity = f"{safe_section_name}_{year}"
+session_identity = safe_section_name
 previous_session_identity = st.session_state.get("session_identity")
 is_app_boot = previous_session_identity is None
 session_identity_changed = previous_session_identity != session_identity
@@ -340,10 +370,10 @@ if st.session_state.get("no_active_session"):
         )
         st.stop()
 
-# ── Canvi de TÍTOL (mateix any) = REANOMENAR la sessió carregada ──────────
+# ── Canvi de TÍTOL = REANOMENAR la sessió carregada ───────────────────────
 # Editar el títol mai crea una sessió nova (per això hi ha el botó
 # «➕ Nova sessió»): la carpeta de la sessió actual es reanomena i tot el
-# treball segueix intacte.
+# treball segueix intacte. (L'any ja no hi intervé: és un àmbit.)
 _prev_loaded_str = st.session_state.get("loaded_session_dir")
 if (
     session_identity_changed
@@ -351,11 +381,13 @@ if (
     and _prev_loaded_str
     and section_name.strip()
 ):
-    _prev_section, _prev_year = infer_section_year_from_session_name(
-        previous_session_identity or ""
-    )
     _prev_dir = Path(_prev_loaded_str)
-    if _prev_year == year and _prev_dir.exists() and _prev_dir != default_session_dir:
+    # Títol al qual es torna si el reanomenament no es pot fer. Amb els
+    # noms nous (sense any) és el nom sencer de la carpeta anterior.
+    _prev_section = infer_section_year_from_session_name(
+        previous_session_identity or ""
+    )[0]
+    if _prev_dir.exists() and _prev_dir != default_session_dir:
         if default_session_dir.exists():
             # toast (no error): sobreviu al st.rerun i l'usuari entén per
             # què el títol «rebota» al valor anterior.
@@ -401,12 +433,56 @@ if session_identity_changed:
     reset_year_sensitive_widget_state()
     st.session_state["session_identity"] = session_identity
 
-# Si la identitat acaba de canviar (canvi de títol/any) i la sessió per
+# ── Canvi d'ANY dins de la MATEIXA sessió ─────────────────────────────────
+# L'any és un àmbit: no es canvia de sessió. Només cal (1) desar al disc
+# de la sessió el que s'ha treballat de l'any que deixem, (2) buidar els
+# editors d'àmbit anual (festius, calendari base) perquè no mostrin els
+# del any anterior i (3) carregar de la sessió els fitxers de l'any nou,
+# si ja n'hi havia. La configuració compartida (activitats, franges,
+# màquines fixes, rodes, elegibilitat…) no es toca: és la mateixa.
+_prev_scope_year = st.session_state.get("scope_year")
+year_scope_changed = _prev_scope_year is not None and _prev_scope_year != year
+if not year_scope_changed:
+    mark_workspace_year(year)
+if year_scope_changed and not session_identity_changed:
+    reset_year_sensitive_widget_state()
+    _loaded_dir_str = st.session_state.get("loaded_session_dir")
+    _canvi_fet = True
+    if _loaded_dir_str:
+        _loaded_dir = Path(_loaded_dir_str)
+        if _loaded_dir.exists():
+            try:
+                # DEFAULT_MONTH: el mes de l'àmbit encara no s'ha calculat
+                # en aquest punt del guió, i per al desat només importa
+                # l'any.
+                save_session_folder(
+                    _loaded_dir, int(_prev_scope_year), DEFAULT_MONTH,
+                )
+                load_session_folder(_loaded_dir, year, DEFAULT_MONTH)
+            except OSError as _exc:
+                # Fitxer obert a l'Excel o lock de sincronització: mai una
+                # pantalla vermella. Com que `scope_year` NO s'ha avançat,
+                # el canvi es tornarà a intentar al pròxim rerun i la feina
+                # de l'any que deixem no es perd.
+                st.toast(
+                    f"No s'ha pogut canviar d'any ({_exc}). Tanca els "
+                    "fitxers oberts (Excel) i torna-ho a provar.",
+                    icon="⚠️",
+                )
+                _canvi_fet = False
+    if _canvi_fet:
+        mark_workspace_year(year)
+    # El workflow es reinicia SEMPRE, encara que el canvi d'any hagi
+    # fallat: el workspace no correspon a l'any de l'àmbit i no s'ha de
+    # poder exportar un calendari etiquetat amb l'any nou a partir de les
+    # dades de l'any vell.
+    set_workflow_state(False)
+
+# Si la identitat acaba de canviar (canvi de títol) i la sessió per
 # defecte d'aquesta nova identitat encara no existeix, la creem ARA perquè
 # el desplegable la pugui mostrar com a seleccionada des del primer cop.
-previous_year_session_dir = DEFAULT_SESSION_ROOT / f"{safe_section_name}_{year - 1}"
-_carry_pre = previous_year_session_dir if previous_year_session_dir.exists() else None
-if _carry_pre is None and last_session_dir and last_session_dir.exists() and last_session_dir != default_session_dir:
+_carry_pre = None
+if last_session_dir and last_session_dir.exists() and last_session_dir != default_session_dir:
     _carry_pre = last_session_dir
 if session_identity_changed and not default_session_dir.exists():
     create_empty_session_folder(default_session_dir, year, carry_forward_source=_carry_pre)
@@ -414,6 +490,7 @@ if session_identity_changed and not default_session_dir.exists():
         sync_workspace_to_loaded_session()
         session_store.reset_current_workspace_for_new_session(year)
         load_session_folder(default_session_dir, year, DEFAULT_MONTH)
+        mark_workspace_year(year)
         set_workflow_state(False)
     write_last_session_name(default_session_dir)
     # Refresquem la llista per incloure la nova sessió al desplegable.
@@ -442,9 +519,10 @@ if session_options:
     )
 
 session_dir = DEFAULT_SESSION_ROOT / selected_session if selected_session else default_session_dir
-previous_year_session_dir = DEFAULT_SESSION_ROOT / f"{safe_section_name}_{year - 1}"
-carry_forward_source_dir = previous_year_session_dir if previous_year_session_dir.exists() else None
-if carry_forward_source_dir is None and last_session_dir and last_session_dir.exists() and last_session_dir != session_dir:
+# Font de la configuració inicial d'una sessió NOVA: l'última sessió
+# oberta. (Ja no hi ha «sessió de l'any anterior»: l'any és un àmbit.)
+carry_forward_source_dir = None
+if last_session_dir and last_session_dir.exists() and last_session_dir != session_dir:
     carry_forward_source_dir = last_session_dir
 
 # Càrrega de sessió: si la sessió activa difereix de la que estava
@@ -461,6 +539,7 @@ if not session_dir.exists():
         sync_workspace_to_loaded_session()
         session_store.reset_current_workspace_for_new_session(year)
         load_session_folder(session_dir, year, DEFAULT_MONTH)
+        mark_workspace_year(year)
         set_workflow_state(False)
     write_last_session_name(session_dir)
     # Pre-omplir el desplegable perquè la nova sessió hi aparegui com a
@@ -481,6 +560,7 @@ else:
         sync_workspace_to_loaded_session()
         load_session_folder(session_dir, year, DEFAULT_MONTH)
         write_last_session_name(session_dir)
+        mark_workspace_year(year)
         set_workflow_state(False)
         # Buidar drafts en memòria (incloses les claus per-facultatiu)
         # perquè els editors rellegeixin del disc de la sessió nova.
@@ -881,9 +961,15 @@ with data_tab2:
         # aquest ordre de prioritat i només infringeix una si la
         # cobertura del calendari ho fa estrictament impossible — cap
         # xoc entre elles pot deixar el solver sense solució.
+        st.caption(
+            "Per sobre de tot hi ha el que **mai** es pot infringir i no "
+            "es configura aquí: la cobertura de les franges, les "
+            "**absències**, les **guàrdies** i els **festius**, i que "
+            "ningú no pot fer dues màquines presencials el mateix dia."
+        )
         st.markdown(
-            "##### ⚖️ Restriccions (de més a menys pes — el solver les "
-            "respecta en aquest ordre sempre que el calendari ho permet)"
+            "##### 🥇 Primer nivell — manen sobre tota la resta "
+            "(de més a menys pes)"
         )
         render_fixed_machines_editor(slot_catalog_path, all_professional_options)
         with st.expander("Canvi d'activitat (manual)", expanded=False):
@@ -941,10 +1027,25 @@ with data_tab2:
                 "(repartides segons la jornada). És diferent dels **dies "
                 "NP/PRES** de sobre, que fixen **quins dies** ve cada "
                 "facultatiu: per això pesen més que l'equilibri — si xoquen, "
-                "mana la preferència personal."
+                "mana la preferència personal. És l'última d'aquest primer "
+                "nivell: mana sobre la roda i els comitès."
             )
             render_planning_rules_editor(Path("data/planning_rules.csv"))
+        st.markdown("##### 🥈 Segon nivell — només si el primer ho permet")
+        st.caption(
+            "Entremig, el programa reparteix equitativament les "
+            "**presencialitats**, i això mana sobre el que ve ara. En "
+            "canvi, el repartiment del **total de màquines** sí que cedeix "
+            "davant la roda. Tot aquest segon nivell pot quedar sense "
+            "complir si xoca amb qualsevol cosa del primer."
+        )
         with st.expander("Roda d'assignació (torns rotatoris)", expanded=False):
+            st.caption(
+                "Si una roda no es compleix, sovint no és per prioritat: "
+                "mira si els seus participants ja tenen **màquina fixa** "
+                "aquells dies — llavors no poden agafar el torn i va a "
+                "parar a algú altre. Ampliar els participants ho resol."
+            )
             from src.ui.wheel_editor import render_wheel_editor
             render_wheel_editor(existing_slots, professional_options)
         with st.expander("Comitès", expanded=False):

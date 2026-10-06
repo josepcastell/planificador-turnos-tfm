@@ -260,6 +260,7 @@ def _write_week_block(
     festiu_days: set[str],
     start_row: int,
     n_sub: int = 1,
+    review_slot_ids: list[str] | None = None,
 ) -> int:
     """Escriu un bloc setmanal a `ws` amb el layout del PDF setmanal:
     TOTS els dies ocupen el mateix ample (`n_sub` subcolumnes) i les
@@ -422,9 +423,20 @@ def _write_week_block(
     # ── Revisions: una fila per slot de revisió. Span per dia
     #              (s'aplica al dia sencer; mostrem el facultatiu
     #              fusionant les màquines del dia).
-    review_slots = sorted(
-        {str(rr.slot_id).strip().upper() for rr in review_rows.itertuples(index=False)},
-        key=calendar_display_slot_sort_key,
+    # Les files de revisió es fixen PER FULL, no per setmana: si es
+    # calculessin aquí, una setmana sense cap revisió tindria menys files
+    # i la banda quedaria més curta que la resta (setmanes de mides
+    # diferents). Amb la llista del full, les setmanes sense revisió
+    # mostren la fila buida i totes les bandes fan el mateix alt.
+    review_slots = (
+        list(review_slot_ids) if review_slot_ids is not None
+        else sorted(
+            {
+                str(rr.slot_id).strip().upper()
+                for rr in review_rows.itertuples(index=False)
+            },
+            key=calendar_display_slot_sort_key,
+        )
     )
     for sid in review_slots:
         _set_label(r, f"Rev. {calendar_display_compact_slot_label(sid)}")
@@ -502,6 +514,22 @@ def _write_month_grid(
         for ds in days_str:
             n_sub = max(n_sub, len(_machines_for_day(wdf, ds)))
 
+    # Pre-passada 2: les activitats de REVISIÓ del full sencer. Han de ser
+    # les mateixes a totes les bandes perquè totes facin el mateix alt
+    # (si es calculessin per setmana, una setmana sense revisió quedaria
+    # més curta). Mateix criteri que el PDF.
+    _sheet_reviews = dfm[
+        dfm["slot_id"].astype(str).map(is_review_slot)
+        & ~dfm["professional"].astype(str).str.upper().isin({"", "NONE", "NAN"})
+    ]
+    review_slot_ids = sorted(
+        {
+            str(s).strip().upper()
+            for s in _sheet_reviews["slot_id"].astype(str)
+        },
+        key=calendar_display_slot_sort_key,
+    )
+
     # Reservem la fila 1 per al títol; els blocs setmanals comencen a la 2.
     current_row = 2
     for mon in mondays:
@@ -520,6 +548,7 @@ def _write_month_grid(
             festiu_days,
             current_row,
             n_sub=n_sub,
+            review_slot_ids=review_slot_ids,
         )
 
     max_col = max(2, getattr(ws, "_pdf_like_max_col", 2))
@@ -530,9 +559,6 @@ def _write_month_grid(
     # esguerrada. El bloc de cada dia té un ample total ~constant (les
     # subcolumnes es fan més estretes com més màquines hi ha).
     ws.column_dimensions["A"].width = 10
-    sub_width = min(15.0, max(3.5, round(45.0 / max(1, n_sub), 1)))
-    for i in range(2, max_col + 1):
-        ws.column_dimensions[get_column_letter(i)].width = sub_width
 
     # ── Títol (fila 1), fusionat sobre tota l'amplada del calendari.
     title = "Calendari entre setmana"
@@ -559,9 +585,40 @@ def _write_month_grid(
     # la franja de màquines del PDF; l'equació de proporció ho incorpora.
     _MACH_FACTOR = 2.4
     eff_rows = n_content_rows + (len(machine_rows) * (_MACH_FACTOR - 1))
-    width_pt = (10 + (max_col - 1) * sub_width) * 5.25
-    target_height_pt = width_pt * 7.5 / 11.1
-    row_h = min(34.0, max(10.0, (target_height_pt - 30) / eff_rows))
+
+    _PAGE_RATIO = 11.1 / 7.5          # A4 apaïsat, àrea útil
+    _H_MIN, _H_MAX = 10.0, 46.0       # alçada de fila raonable
+    _W_MIN, _W_MAX = 3.2, 15.0        # amplada de subcolumna llegible
+    _TITLE_H = 30
+
+    def _width_pt(w: float) -> float:
+        return (10 + (max_col - 1) * w) * 5.25
+
+    # 1) Amplada de partida: com més màquines per dia, subcolumnes més
+    #    estretes (el bloc del dia manté un ample ~constant).
+    sub_width = min(_W_MAX, max(_W_MIN, round(45.0 / max(1, n_sub), 1)))
+    # 2) Alçada que fa que la proporció del contingut sigui la de l'A4.
+    row_h = (_width_pt(sub_width) / _PAGE_RATIO - _TITLE_H) / eff_rows
+    # 3) Si l'alçada se'n va de mare (mesos amb MOLT poques setmanes
+    #    demanarien files altíssimes; amb moltíssimes, files minúscules),
+    #    es topa i es RECALCULA L'AMPLADA perquè la proporció segueixi
+    #    quadrant. Sense aquest segon ajust, un mes de poques setmanes
+    #    omplia el 100% de l'ample i només un ~38% de l'alt del full.
+    #    Dues passades: topar l'amplada pot tornar a desquadrar l'alçada,
+    #    i amb un sol ajust el full tornava a quedar mig buit.
+    for _ in range(2):
+        if _H_MIN <= row_h <= _H_MAX:
+            break
+        row_h = min(_H_MAX, max(_H_MIN, row_h))
+        needed_w_pt = _PAGE_RATIO * (_TITLE_H + eff_rows * row_h)
+        sub_width = min(_W_MAX, max(_W_MIN, round(
+            (needed_w_pt / 5.25 - 10) / max(1, max_col - 1), 1,
+        )))
+        row_h = (_width_pt(sub_width) / _PAGE_RATIO - _TITLE_H) / eff_rows
+    row_h = min(_H_MAX, max(_H_MIN, row_h))
+
+    for i in range(2, max_col + 1):
+        ws.column_dimensions[get_column_letter(i)].width = sub_width
     for rr in range(2, current_row):
         ws.row_dimensions[rr].height = (
             row_h * _MACH_FACTOR if rr in machine_rows else row_h

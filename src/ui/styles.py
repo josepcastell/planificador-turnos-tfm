@@ -28,9 +28,18 @@ def apply_global_styles() -> None:
 
         /* Amagar la barra d'eines de Streamlit (botó Deploy + menú) i fer
            transparent la franja blanca de dalt per recuperar espai. Es manté
-           el botó de plegar/desplegar la barra lateral. */
+           el botó de plegar/desplegar la barra lateral.
+
+           També s'amaga l'indicador d'«executant» amb els botons Stop i
+           Rerun: no aporten res a l'usuari i el Stop és PERILLÓS a mitja
+           generació — el càlcul va en un procés a part i seguiria corrent
+           pel seu compte, però la pantalla ja no el recolliria (ni PDF ni
+           desat a la sessió). Per aturar l'app hi ha el botó de tancar de
+           la barra lateral, que ho fa net. */
         [data-testid="stAppDeployButton"],
-        [data-testid="stMainMenu"] {
+        [data-testid="stMainMenu"],
+        [data-testid="stStatusWidget"],
+        [data-testid="stToolbarActions"] {
             display: none !important;
         }
 

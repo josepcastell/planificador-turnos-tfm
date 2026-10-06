@@ -14,11 +14,17 @@ class SessionFileSpec:
 
     saved_as: "input" copied input/ "generated" copied output / None transient.
     on_new_session: "keep" left alone / "blank" reinit with blank_header / "delete" removed.
+    stored_template: nom amb què es DESA dins la carpeta de sessió quan ha
+        de ser diferent del del workspace. Es fa servir per als fitxers
+        generats que depenen de l'any però que els generadors llegeixen i
+        escriuen sempre amb el mateix nom: desats sense l'any, el 2026 i el
+        2027 es trepitjaven la mateixa còpia dins la sessió.
     """
     path_template: str
     saved_as: str | None
     on_new_session: str = "keep"
     blank_header: str | None = None
+    stored_template: str | None = None
 
 
 _SESSION_FILE_REGISTRY: list[SessionFileSpec] = [
@@ -44,6 +50,7 @@ _SESSION_FILE_REGISTRY: list[SessionFileSpec] = [
         "data/weekday/day_info.csv",
         saved_as="generated",
         on_new_session="delete",
+        stored_template="data/weekday/day_info_{year}.csv",
     ),
     # Franges puntuals i calendaris de mòduls
     SessionFileSpec(
@@ -55,6 +62,7 @@ _SESSION_FILE_REGISTRY: list[SessionFileSpec] = [
         "data/weekday/calendar_slots.csv",
         saved_as="generated",
         on_new_session="delete",
+        stored_template="data/weekday/calendar_slots_{year}.csv",
     ),
     # Indisponibilitats, guàrdies i reduccions
     SessionFileSpec(
@@ -126,11 +134,13 @@ _SESSION_FILE_REGISTRY: list[SessionFileSpec] = [
         "outputs/schedule_weekday.csv",
         saved_as="generated",
         on_new_session="delete",
+        stored_template="outputs/schedule_weekday_{year}.csv",
     ),
     SessionFileSpec(
         "outputs/metrics_weekday.csv",
         saved_as="generated",
         on_new_session="delete",
+        stored_template="outputs/metrics_weekday_{year}.csv",
     ),
     SessionFileSpec(
         "outputs/schedule_weekday_before_reajust.csv",
@@ -144,6 +154,16 @@ _SESSION_FILE_REGISTRY: list[SessionFileSpec] = [
     ),
     SessionFileSpec(
         "data/eligibility.csv",
+        saved_as="input",
+    ),
+    # Llistes de Màquines i Llocs: no hi eren, així que no es desaven mai
+    # amb la sessió i es perdien en canviar-ne (o d'any).
+    SessionFileSpec(
+        "data/maquines.csv",
+        saved_as="input",
+    ),
+    SessionFileSpec(
+        "data/llocs.csv",
         saved_as="input",
     ),
     SessionFileSpec(
@@ -169,6 +189,12 @@ _SESSION_FILE_REGISTRY: list[SessionFileSpec] = [
 
 def _spec_path(spec: SessionFileSpec, year: int) -> Path:
     return Path(spec.path_template.format(year=year))
+
+
+def _spec_stored_path(spec: SessionFileSpec, year: int) -> Path:
+    """Camí RELATIU dins la carpeta de sessió."""
+    template = spec.stored_template or spec.path_template
+    return Path(template.format(year=year))
 
 
 def list_session_folders(root: Path) -> list[Path]:
@@ -221,11 +247,23 @@ def write_last_session_name(session_dir: Path, last_session_path: Path) -> None:
 
 
 def infer_section_year_from_session_name(session_name: str, default_year: int) -> tuple[str, int]:
-    if "_" in session_name:
-        section_part, year_part = session_name.rsplit("_", 1)
-        if year_part.isdigit():
+    """(secció, any) a partir del nom de la carpeta de sessió.
+
+    Les sessions NOVES es diuen només «{secció}» (l'any és un àmbit), així
+    que el nom sencer és la secció i l'any és el per defecte. Es manté la
+    lectura del format antic «{secció}_{any}» per a carpetes que l'usuari
+    no hagi migrat: sense això, el títol del calendari es perdria."""
+    name = str(session_name or "").strip()
+    if "_" in name:
+        section_part, year_part = name.rsplit("_", 1)
+        # isascii(): `isdigit()` accepta dígits Unicode («²²²²») que després
+        # farien petar int().
+        if (
+            year_part.isascii() and year_part.isdigit()
+            and len(year_part) == 4 and section_part
+        ):
             return section_part, int(year_part)
-    return "Seccio", default_year
+    return (name or "Seccio"), default_year
 
 
 def csv_has_data_rows(path: Path) -> bool:
@@ -288,7 +326,7 @@ def seed_carry_forward_files_if_needed(
 
 def session_input_file_pairs(year: int, month: int) -> list[tuple[Path, Path]]:
     return [
-        (_spec_path(s, year), _spec_path(s, year))
+        (_spec_path(s, year), _spec_stored_path(s, year))
         for s in _SESSION_FILE_REGISTRY
         if s.saved_as == "input"
     ]
@@ -296,7 +334,7 @@ def session_input_file_pairs(year: int, month: int) -> list[tuple[Path, Path]]:
 
 def session_generated_file_pairs(year: int, month: int) -> list[tuple[Path, Path]]:
     return [
-        (_spec_path(s, year), _spec_path(s, year))
+        (_spec_path(s, year), _spec_stored_path(s, year))
         for s in _SESSION_FILE_REGISTRY
         if s.saved_as == "generated"
     ]
@@ -438,6 +476,85 @@ def load_session_folder(session_dir: Path, year: int, month: int, pdf_output_dir
 
 
 SNAPSHOTS_DIRNAME = "_snapshots"
+
+
+def migrate_year_suffixed_sessions(
+    root: Path, last_session_path: Path | None = None,
+) -> list[tuple[str, str]]:
+    """Migració ÚNICA: les sessions ja no van per any.
+
+    Fins ara la carpeta d'una sessió era «{secció}_{any}», així que
+    canviar l'any a la barra lateral obria una sessió DIFERENT i la
+    configuració (màquines fixes, rodes, llistes de màquines i llocs) no
+    hi era. Ara l'any és només un àmbit dins de la MATEIXA sessió, que
+    pot contenir tots els anys alhora.
+
+    Aquesta funció renombra «{secció}_{any}» → «{secció}» quan el nom de
+    destí està lliure. Si una secció té CARPETES DE DIVERSOS ANYS, es
+    renombra la de l'any més alt i la resta es deixen INTACTES (no
+    s'esborra ni es fusiona res mai): l'usuari les veurà a la llista i
+    decidirà. Retorna la llista de (nom_antic, nom_nou) renombrats."""
+    import re
+
+    if not root.exists():
+        return []
+    # Marcador: la migració és d'UNA sola vegada. Sense ell s'executaria a
+    # cada rerun de Streamlit i es menjaria sessions que l'usuari hagi
+    # titulat amb un any a posta («TC 2026» → carpeta TC_2026 → TC).
+    marcador = root / ".year_scope_migrated"
+    if marcador.exists():
+        return []
+    # `.+?` (no cobdiciós) + anys plausibles: sense això «Seccio_2026_2027»
+    # es migraria en dues passades i «Sala_1234» es prendria per un any.
+    patro = re.compile(r"^(?P<base>.+?)_(?P<year>20\d{2})$")
+    per_base: dict[str, list[tuple[int, Path]]] = {}
+    try:
+        contingut = list(root.iterdir())
+    except OSError:
+        return []
+    for p in contingut:
+        try:
+            if not p.is_dir():
+                continue
+        except OSError:
+            continue
+        m = patro.match(p.name)
+        if m:
+            per_base.setdefault(m.group("base"), []).append(
+                (int(m.group("year")), p)
+            )
+
+    renombrats: list[tuple[str, str]] = []
+    for base, items in sorted(per_base.items()):
+        desti = root / base
+        if desti.exists():
+            continue  # ja hi ha una sessió amb el nom definitiu
+        # L'any més alt és el que porta la configuració més recent.
+        _any, origen = max(items, key=lambda it: it[0])
+        try:
+            origen.rename(desti)
+        except OSError:
+            continue
+        renombrats.append((origen.name, desti.name))
+        if last_session_path is not None:
+            try:
+                if (
+                    last_session_path.exists()
+                    and last_session_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).strip() in {p.name for _y, p in items}
+                ):
+                    # Apunta a QUALSEVOL any d'aquesta secció, no només al
+                    # que s'ha renombrat: si apuntava a un any vell, en
+                    # obrir s'obriria la sessió antiga en lloc de la migrada.
+                    write_last_session_name(desti, last_session_path)
+            except OSError:
+                pass
+    try:
+        marcador.write_text("migrat\n", encoding="utf-8")
+    except OSError:
+        pass
+    return renombrats
 
 
 def migrate_legacy_session_roots(current_root: Path, legacy_roots: list[Path]) -> int:
