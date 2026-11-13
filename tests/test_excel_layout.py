@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 from openpyxl.utils import range_boundaries
 
+from src.domain.schedule_format import calendar_display_compact_slot_label
 from src.services.excel_export import export_schedule_to_excel
 
 # Àrea útil d'un A4 apaïsat amb els marges de l'exportador (polzades→pt).
@@ -117,6 +118,22 @@ class TestUniformWeekBands:
             for r in range(1, ws.max_row + 1)
         ]
         assert sum(1 for e in etiquetes if e.startswith("Rev.")) == 3
+
+    def test_review_is_not_an_activity_column(self, workspace):
+        # REGRESSIÓ: la revisió (franja MATI) entrava a les màquines del
+        # dia i sortia com a columna, a més de la seva fila «Rev.».
+        ws = _export(workspace, _schedule(with_review_on_weeks=(0, 1, 2)))["Calendari"]
+        fora = [
+            (c.coordinate, c.value)
+            for row in ws.iter_rows(min_row=2)
+            if not str(row[0].value or "").startswith("Rev.")
+            for c in row[1:]
+            if str(c.value or "").strip()
+            in {"REV_A", calendar_display_compact_slot_label("REV_A")}
+        ]
+        assert fora == []
+        # 5 dies x 3 activitats + la columna d'etiquetes.
+        assert ws.max_column == 1 + 5 * len(MACHINES)
 
 
 class TestA4Fit:

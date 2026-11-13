@@ -219,8 +219,9 @@ def _machines_for_day(week_df: pd.DataFrame, dstr: str) -> list[str]:
 
 
 def _prepared_week_df(schedule_df: pd.DataFrame, days_str: list[str]) -> pd.DataFrame:
-    """Files de màquina del bloc (sense guàrdies ni files sense
-    facultatiu), amb les columnes auxiliars _sid/_pid/_franja."""
+    """Files de màquina del bloc (sense guàrdies, revisions ni files
+    sense facultatiu), amb les columnes auxiliars _sid/_pid/_franja.
+    Les revisions van a la seva fila «Revisió», no com a columna."""
     week_df = schedule_df[schedule_df["day"].isin(days_str)].copy()
     if "is_flipped" not in week_df.columns:
         week_df["is_flipped"] = 0
@@ -229,6 +230,7 @@ def _prepared_week_df(schedule_df: pd.DataFrame, days_str: list[str]) -> pd.Data
     week_df["_franja"] = week_df["franja"].astype(str).str.strip().str.upper()
     return week_df[
         ~week_df["_sid"].isin(GUARDS_RESERVED_SLOT_IDS)
+        & ~week_df["_sid"].map(is_review_slot)
         & ~week_df["_pid"].isin({"", "NONE", "NAN"})
         & (week_df["_franja"].isin({"MATI", "TARDA", "NIT"}))
     ].copy()
