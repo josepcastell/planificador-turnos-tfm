@@ -1,0 +1,413 @@
+"""Tests de la vinculació de màquines PER (dia-setmana, franja):
+
+  - Servei de grups al template (`set/clear/linked_groups_in_template`):
+    múltiples grups, dissolució de grups previs solapats, blocs de
+    qualsevol mida (abans es tallaven a 5),
+    localitat per (dia, franja).
+  - Motor: l'acoblament dur i la compatibilitat diària només apliquen els
+    (dia-setmana, franja) on el vincle existeix; el recompte setmanal mai
+    deixa una màquina invisible els dies no vinculats; un bloc NP-NP no
+    compta com a presencial; les cadenes (A,B)+(B,C) són UN sol bloc.
+"""
+
+from dataclasses import dataclass
+
+import pandas as pd
+from ortools.sat.python import cp_model
+
+from src.services.slot_catalog import (
+    clear_linked_group_in_template,
+    linked_groups_in_template,
+    set_linked_group_in_template,
+)
+from src.solver.constraints import (
+    _add_coverage_constraints,
+    _add_daily_compat_constraints,
+    _add_structural_coupling,
+    _build_machine_term_specs,
+    _collect_machine_terms_for_day,
+    _slot_groups_from_pairs,
+)
+from src.solver.normalize import _make_slot_key
+
+# 2026-01-05 és DILLUNS; 2026-01-06 és DIMARTS.
+MONDAY = "2026-01-05"
+TUESDAY = "2026-01-06"
+
+
+@dataclass
+class _Row:
+    day: str
+    franja: str
+    slot_id: str
+    presentiality: str
+    work_mode: str = "NORMAL"
+    position: int = 1
+
+
+def _template(rows) -> pd.DataFrame:
+    """rows = [(weekday_name, franja, slot_id, linked_to), ...]"""
+    return pd.DataFrame(
+        [
+            {
+                "weekday_name": wd, "franja": fr, "slot_id": sid,
+                "presentiality": "PRESENCIAL", "work_mode": "NORMAL",
+                "required_staff": 1, "is_active": 1, "linked_to": lk,
+            }
+            for wd, fr, sid, lk in rows
+        ]
+    )
+
+
+def _build_x(model, professionals, slot_rows):
+    x = {}
+    for p in professionals:
+        for r in slot_rows:
+            sk = _make_slot_key(r)
+            x[p, sk] = model.NewBoolVar(
+                f"x_{p}_{r.day}_{r.franja}_{r.slot_id}_{r.position}"
+                .replace("-", "_").replace(" ", "_")
+            )
+    return x
+
+
+def _is_feasible(model: cp_model.CpModel) -> bool:
+    solver = cp_model.CpSolver()
+    return solver.Solve(model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+class TestSlotGroupsFromPairs:
+    def test_chain_is_one_block(self):
+        assert _slot_groups_from_pairs([("A", "B"), ("B", "C")]) == [["A", "B", "C"]]
+
+    def test_two_independent_blocks(self):
+        assert _slot_groups_from_pairs([("A", "B"), ("C", "D")]) == [
+            ["A", "B"], ["C", "D"],
+        ]
+
+    def test_empty(self):
+        assert _slot_groups_from_pairs([]) == []
+        assert _slot_groups_from_pairs(None) == []
+
+
+class TestTemplateGroupService:
+    def test_set_and_read_group_local_to_daykey(self):
+        t = _template([
+            ("MONDAY", "MATI", "A", ""),
+            ("MONDAY", "MATI", "B", ""),
+            ("MONDAY", "MATI", "C", ""),
+            ("TUESDAY", "MATI", "A", ""),
+            ("TUESDAY", "MATI", "B", ""),
+        ])
+        t = set_linked_group_in_template(t, "MONDAY", "MATI", ["A", "B", "C"])
+        assert linked_groups_in_template(t, "MONDAY", "MATI") == [["A", "B", "C"]]
+        # El MATEIX parell de màquines el dimarts NO està vinculat.
+        assert linked_groups_in_template(t, "TUESDAY", "MATI") == []
+
+    def test_new_group_dissolves_overlapping_prior_group(self):
+        t = _template([
+            ("MONDAY", "MATI", s, "") for s in ["A", "B", "C", "D"]
+        ])
+        t = set_linked_group_in_template(t, "MONDAY", "MATI", ["A", "B", "C"])
+        # Nou grup [B, D]: el grup previ que contenia B es dissol sencer —
+        # C NO pot quedar penjant apuntant a A.
+        t = set_linked_group_in_template(t, "MONDAY", "MATI", ["B", "D"])
+        assert linked_groups_in_template(t, "MONDAY", "MATI") == [["B", "D"]]
+
+    def test_multiple_groups_same_daykey(self):
+        t = _template([
+            ("MONDAY", "MATI", s, "") for s in ["A", "B", "C", "D"]
+        ])
+        t = set_linked_group_in_template(t, "MONDAY", "MATI", ["A", "B"])
+        t = set_linked_group_in_template(t, "MONDAY", "MATI", ["C", "D"])
+        assert linked_groups_in_template(t, "MONDAY", "MATI") == [
+            ["A", "B"], ["C", "D"],
+        ]
+
+    def test_big_block_keeps_every_member(self):
+        slots = [f"S{i}" for i in range(8)]
+        t = _template([("MONDAY", "MATI", s, "") for s in slots])
+        t = set_linked_group_in_template(t, "MONDAY", "MATI", slots)
+        (group,) = linked_groups_in_template(t, "MONDAY", "MATI")
+        assert group == sorted(slots)
+
+    def test_less_than_two_members_is_noop(self):
+        t = _template([("MONDAY", "MATI", "A", "")])
+        t2 = set_linked_group_in_template(t, "MONDAY", "MATI", ["A"])
+        assert linked_groups_in_template(t2, "MONDAY", "MATI") == []
+
+    def test_clear_group_only_in_daykey(self):
+        t = _template([
+            ("MONDAY", "MATI", "A", ""),
+            ("MONDAY", "MATI", "B", ""),
+            ("TUESDAY", "MATI", "A", ""),
+            ("TUESDAY", "MATI", "B", ""),
+        ])
+        t = set_linked_group_in_template(t, "MONDAY", "MATI", ["A", "B"])
+        t = set_linked_group_in_template(t, "TUESDAY", "MATI", ["A", "B"])
+        t = clear_linked_group_in_template(t, "MONDAY", "MATI", "A")
+        assert linked_groups_in_template(t, "MONDAY", "MATI") == []
+        assert linked_groups_in_template(t, "TUESDAY", "MATI") == [["A", "B"]]
+
+    def test_clear_nonmember_is_noop(self):
+        t = _template([
+            ("MONDAY", "MATI", "A", ""),
+            ("MONDAY", "MATI", "B", ""),
+        ])
+        t = set_linked_group_in_template(t, "MONDAY", "MATI", ["A", "B"])
+        t = clear_linked_group_in_template(t, "MONDAY", "MATI", "Z")
+        assert linked_groups_in_template(t, "MONDAY", "MATI") == [["A", "B"]]
+
+
+class TestPerDayStructuralCoupling:
+    def _rows_both_days(self):
+        return [
+            _Row(MONDAY, "MATI", "A", "PRESENCIAL"),
+            _Row(MONDAY, "MATI", "B", "PRESENCIAL"),
+            _Row(TUESDAY, "MATI", "A", "PRESENCIAL"),
+            _Row(TUESDAY, "MATI", "B", "PRESENCIAL"),
+        ]
+
+    def _build(self, links_by_wf):
+        model = cp_model.CpModel()
+        rows = self._rows_both_days()
+        professionals = ["P1", "P2"]
+        x = _build_x(model, professionals, rows)
+        keys_by_day = {}
+        for r in rows:
+            keys_by_day.setdefault(r.day, []).append(_make_slot_key(r))
+        _add_coverage_constraints(
+            model, x, professionals, [_make_slot_key(r) for r in rows]
+        )
+        _add_structural_coupling(
+            model, x, professionals, keys_by_day, links_by_wf=links_by_wf
+        )
+        return model, x, rows
+
+    def test_link_applies_on_monday_not_on_tuesday(self):
+        links = {("MONDAY", "MATI"): [("A", "B")]}
+        # DILLUNS: persones diferents a A i B → infactible.
+        model, x, rows = self._build(links)
+        model.Add(x[("P1", _make_slot_key(rows[0]))] == 1)
+        model.Add(x[("P2", _make_slot_key(rows[1]))] == 1)
+        assert not _is_feasible(model)
+        # DIMARTS: persones diferents a A i B → factible (no vinculades).
+        model, x, rows = self._build(links)
+        model.Add(x[("P1", _make_slot_key(rows[2]))] == 1)
+        model.Add(x[("P2", _make_slot_key(rows[3]))] == 1)
+        assert _is_feasible(model)
+
+
+class TestPerDayDailyCompat:
+    def _build(self, links_by_wf, force_day):
+        model = cp_model.CpModel()
+        rows = [
+            _Row(MONDAY, "MATI", "A", "PRESENCIAL"),
+            _Row(MONDAY, "MATI", "B", "NO_PRESENCIAL"),
+            _Row(TUESDAY, "MATI", "A", "PRESENCIAL"),
+            _Row(TUESDAY, "MATI", "B", "NO_PRESENCIAL"),
+        ]
+        professionals = ["P1"]
+        x = _build_x(model, professionals, rows)
+        _add_daily_compat_constraints(
+            model, x, professionals, rows, [MONDAY, TUESDAY],
+            review_slots=set(), links_by_wf=links_by_wf,
+        )
+        day_rows = [r for r in rows if r.day == force_day]
+        for r in day_rows:
+            model.Add(x[("P1", _make_slot_key(r))] == 1)
+        return model
+
+    def test_two_machines_same_franja_only_allowed_on_linked_day(self):
+        links = {("MONDAY", "MATI"): [("A", "B")]}
+        # DILLUNS (vinculades): P1 pot ocupar A i B a la mateixa franja.
+        assert _is_feasible(self._build(links, MONDAY))
+        # DIMARTS (no vinculades): P1 a A i B alhora → infactible. Sense el
+        # filtre per dia, la unió global permetria aquest forat.
+        assert not _is_feasible(self._build(links, TUESDAY))
+
+
+class TestWeeklyCountingSpecs:
+    def test_linked_slot_counts_on_non_linked_days(self):
+        # A i B vinculades NOMÉS el dilluns: el dimarts han de ser màquines
+        # NORMALS del recompte setmanal (mai invisibles).
+        rows = [
+            _Row(MONDAY, "MATI", "A", "PRESENCIAL"),
+            _Row(MONDAY, "MATI", "B", "NO_PRESENCIAL"),
+            _Row(TUESDAY, "MATI", "A", "PRESENCIAL"),
+            _Row(TUESDAY, "MATI", "B", "NO_PRESENCIAL"),
+        ]
+        keys_by_day = {}
+        for r in rows:
+            keys_by_day.setdefault(r.day, []).append(_make_slot_key(r))
+        specs = _build_machine_term_specs(
+            keys_by_day, review_slots=set(),
+            links_by_wf={("MONDAY", "MATI"): [("A", "B")]},
+        )
+        coupling_mon, machine_mon, pres_mon, _flip_mon = specs[MONDAY]
+        assert len(coupling_mon) == 1  # un grup [A, B]
+        assert machine_mon == []       # cap màquina fora del grup
+        coupling_tue, machine_tue, pres_tue, flip_tue = specs[TUESDAY]
+        assert coupling_tue == []
+        assert {sk[2] for sk in machine_tue} == {"A", "B"}
+        assert {sk[2] for sk in pres_tue} == {"A"}
+        assert {sk[2] for sk in flip_tue} == {"B"}
+
+    def test_group_presential_only_if_any_member_is(self):
+        rows_np = [
+            _Row(MONDAY, "MATI", "A", "NO_PRESENCIAL"),
+            _Row(MONDAY, "MATI", "B", "NO_PRESENCIAL"),
+        ]
+        keys_by_day = {MONDAY: [_make_slot_key(r) for r in rows_np]}
+        specs = _build_machine_term_specs(
+            keys_by_day, review_slots=set(),
+            links_by_wf={("MONDAY", "MATI"): [("A", "B")]},
+        )
+        model = cp_model.CpModel()
+        x = _build_x(model, ["P1"], rows_np)
+        machine_terms, pres_terms = _collect_machine_terms_for_day(
+            model, x, "P1", MONDAY, specs[MONDAY], "t",
+        )
+        # El bloc NP-NP compta 1 màquina però CAP presencial.
+        assert len(machine_terms) == 1
+        assert pres_terms == []
+
+    def test_two_groups_same_day_count_two_machines(self):
+        rows = [
+            _Row(MONDAY, "MATI", "A", "PRESENCIAL"),
+            _Row(MONDAY, "MATI", "B", "NO_PRESENCIAL"),
+            _Row(MONDAY, "TARDA", "C", "PRESENCIAL"),
+            _Row(MONDAY, "TARDA", "D", "NO_PRESENCIAL"),
+        ]
+        keys_by_day = {MONDAY: [_make_slot_key(r) for r in rows]}
+        specs = _build_machine_term_specs(
+            keys_by_day, review_slots=set(),
+            links_by_wf={
+                ("MONDAY", "MATI"): [("A", "B")],
+                ("MONDAY", "TARDA"): [("C", "D")],
+            },
+        )
+        model = cp_model.CpModel()
+        x = _build_x(model, ["P1"], rows)
+        machine_terms, pres_terms = _collect_machine_terms_for_day(
+            model, x, "P1", MONDAY, specs[MONDAY], "t",
+        )
+        # Dos blocs diferents = 2 màquines (mai col·lapsats en un únic max).
+        assert len(machine_terms) == 2
+        assert len(pres_terms) == 2
+
+    def test_chain_counts_as_single_block(self):
+        rows = [
+            _Row(MONDAY, "MATI", "A", "PRESENCIAL"),
+            _Row(MONDAY, "MATI", "B", "NO_PRESENCIAL"),
+            _Row(MONDAY, "MATI", "C", "NO_PRESENCIAL"),
+        ]
+        keys_by_day = {MONDAY: [_make_slot_key(r) for r in rows]}
+        specs = _build_machine_term_specs(
+            keys_by_day, review_slots=set(),
+            links_by_wf={("MONDAY", "MATI"): [("A", "B"), ("B", "C")]},
+        )
+        coupling, machine, _pres, _flip = specs[MONDAY]
+        assert len(coupling) == 1
+        assert len(coupling[0]) == 3
+        assert machine == []
+
+
+class TestLinkDotMaps:
+    """Punt de color propi per bloc al calendari de Franges (UI)."""
+
+    def _tpl(self, rows):
+        return pd.DataFrame(
+            rows,
+            columns=[
+                "weekday_name", "franja", "slot_id", "presentiality",
+                "work_mode", "required_staff", "linked_to",
+            ],
+        )
+
+    def test_same_block_same_dot_across_days(self):
+        from src.ui.weekday_slot_editor import _link_dot_maps
+        df = self._tpl([
+            ("MONDAY", "MATI", "ECO", "PRESENCIAL", "NORMAL", 1, "MX"),
+            ("MONDAY", "MATI", "MX", "PRESENCIAL", "NORMAL", 1, ""),
+            ("TUESDAY", "MATI", "ECO", "PRESENCIAL", "NORMAL", 1, "MX"),
+            ("TUESDAY", "MATI", "MX", "PRESENCIAL", "NORMAL", 1, ""),
+        ])
+        _, dots = _link_dot_maps(df)
+        assert (
+            dots[("MONDAY", "MATI", "ECO")]
+            == dots[("MONDAY", "MATI", "MX")]
+            == dots[("TUESDAY", "MATI", "ECO")]
+        )
+
+    def test_different_blocks_get_different_dots(self):
+        from src.ui.weekday_slot_editor import _link_dot_maps
+        df = self._tpl([
+            ("MONDAY", "MATI", "ECO", "PRESENCIAL", "NORMAL", 1, "MX"),
+            ("MONDAY", "MATI", "MX", "PRESENCIAL", "NORMAL", 1, ""),
+            ("MONDAY", "TARDA", "UFM", "PRESENCIAL", "NORMAL", 1, "RM"),
+            ("MONDAY", "TARDA", "RM", "PRESENCIAL", "NORMAL", 1, ""),
+        ])
+        groups, dots = _link_dot_maps(df)
+        assert len(groups) == 2
+        assert (
+            dots[("MONDAY", "MATI", "ECO")]
+            != dots[("MONDAY", "TARDA", "UFM")]
+        )
+
+    def test_unlinked_slot_has_no_dot(self):
+        from src.ui.weekday_slot_editor import _link_dot_maps
+        df = self._tpl([
+            ("MONDAY", "MATI", "ECO", "PRESENCIAL", "NORMAL", 1, "MX"),
+            ("MONDAY", "MATI", "MX", "PRESENCIAL", "NORMAL", 1, ""),
+            ("WEDNESDAY", "MATI", "TEL", "PRESENCIAL", "NORMAL", 1, ""),
+        ])
+        _, dots = _link_dot_maps(df)
+        assert ("WEDNESDAY", "MATI", "TEL") not in dots
+
+    def test_empty_template_no_groups(self):
+        from src.ui.weekday_slot_editor import _link_dot_maps
+        groups, dots = _link_dot_maps(self._tpl([]))
+        assert groups == {} and dots == {}
+
+
+def _solve_big_block(capsys, linked):
+    """7 activitats presencials el dilluns al matí i només P1 disponible."""
+    from src.solver.core import build_and_solve_demo
+    slots = [f"S{i}" for i in range(7)]
+    data = {
+        "professionals": pd.DataFrame({
+            "professional_id": ["P1", "P2"], "name": ["P1", "P2"],
+            "fallback": [0, 0], "presence_mode": ["", ""],
+        }),
+        "calendar_slots": pd.DataFrame({
+            "day": [MONDAY] * 7, "franja": ["MATI"] * 7, "slot_id": slots,
+            "presentiality": ["PRESENCIAL"] * 7, "work_mode": ["NORMAL"] * 7,
+            "position": [1] * 7,
+        }),
+        "unavailability": pd.DataFrame(
+            [{"professional_id": "P2", "day": MONDAY, "reason": "vacances"}],
+        ),
+        "preassignments": pd.DataFrame(columns=[
+            "professional_id", "day", "franja", "slot_id", "presentiality",
+            "work_mode", "fixed", "source",
+        ]),
+        "eligibility": pd.DataFrame(columns=["professional_id", "slot_id", "allowed"]),
+        "day_info": pd.DataFrame({"day": [MONDAY], "is_working_day": [1]}),
+        "links_by_wf": (
+            {("MONDAY", "MATI"): [("S0", s) for s in slots[1:]]} if linked else {}
+        ),
+    }
+    capsys.readouterr()
+    _text, rows, _metrics = build_and_solve_demo(data)
+    doubles = [l for l in capsys.readouterr().out.splitlines() if l.startswith("DOBLE_FEINA\t")]
+    return {r[3] for r in rows}, doubles
+
+
+def test_block_of_seven_is_one_job_for_one_person(capsys):
+    # Abans la interfície tallava els blocs a 5 màquines; el solver no.
+    people, doubles = _solve_big_block(capsys, linked=True)
+    assert people == {"P1"} and doubles == []
+    # Sense el vincle, les mateixes 7 activitats serien doble feina.
+    _, doubles = _solve_big_block(capsys, linked=False)
+    assert len(doubles) == 1

@@ -1,0 +1,167 @@
+"""Configurable weekly target rules.
+
+These rules define, per number of effective working days in a week:
+  - target_machines:   objective machine count per professional per week
+                       (acts as a hard cap AND a soft floor — solver aims
+                       to hit it exactly for every professional).
+  - target_presential: objective presential machine count per professional
+                       per week (hard cap + soft floor, same semantics).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pandas as pd
+
+
+# Targets per defecte a 0: una instal·lació nova no porta cap norma de càrrega
+# del servei. Cada servei defineix els seus valors a «Regles d'equilibri
+# setmanal». (Els valors reals viuen al planning_rules.csv de cada usuari.)
+_DEFAULT_TARGET_MACHINES = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+_DEFAULT_TARGET_PRESENTIAL = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+
+_CSV_COLUMNS = [
+    "active_days", "target_machines", "target_presential", "mode",
+    "balance_activity",
+]
+
+# Modes d'equilibri:
+#   personalitzat      — la taula manual per mida de setmana (clàssic).
+#   presencial         — target SETMANAL automàtic: la càrrega PRESENCIAL real
+#                        de cada setmana es reparteix proporcional a la jornada.
+#   total              — target SETMANAL automàtic sobre el TOTAL de màquines
+#                        (PRES+NP junts; la barreja la determinen les franges).
+#   mensual_presencial — target MENSUAL automàtic sobre la càrrega PRESENCIAL
+#                        de tot el mes (sense objectiu per setmana).
+#   mensual_total      — target MENSUAL automàtic sobre el TOTAL de màquines
+#                        de tot el mes.
+#   activitat          — target MENSUAL automàtic sobre les instàncies d'UNA
+#                        activitat concreta (camp `balance_activity`).
+#   setmanal_matins    — com «total» (setmanal), comptant només les
+#   setmanal_tardes      activitats del MATÍ / de la TARDA.
+#   mensual_matins     — com «mensual_total», comptant només les activitats
+#   mensual_tardes       del MATÍ / de la TARDA.
+#   none               — sense regles d'equilibri (només l'equitat dels trams
+#                        3-4, sempre activa).
+RULE_MODES = (
+    "personalitzat", "presencial", "total",
+    "mensual_presencial", "mensual_total", "activitat",
+    "setmanal_matins", "setmanal_tardes", "mensual_matins", "mensual_tardes",
+    "none",
+)
+# Modes per FRANJA → (mode base, franja que es compta).
+FRANJA_MODES = {
+    "setmanal_matins": ("total", "MATI"),
+    "setmanal_tardes": ("total", "TARDA"),
+    "mensual_matins": ("mensual_total", "MATI"),
+    "mensual_tardes": ("mensual_total", "TARDA"),
+}
+
+
+@dataclass
+class PlanningRules:
+    target_machines: dict[int, int] = field(default_factory=lambda: dict(_DEFAULT_TARGET_MACHINES))
+    target_presential: dict[int, int] = field(default_factory=lambda: dict(_DEFAULT_TARGET_PRESENTIAL))
+    # Per defecte: equilibrar per càrrega de feina TOTAL setmanal.
+    mode: str = "total"
+    # Activitat a equilibrar quan mode == "activitat" (slot_id del catàleg).
+    balance_activity: str = ""
+
+    # ── serialisation ──────────────────────────────────────────────────────────
+
+    def to_dataframe(self) -> pd.DataFrame:
+        rows = [
+            {
+                "active_days": days,
+                "target_machines": self.target_machines.get(days, 0),
+                "target_presential": self.target_presential.get(days, 0),
+                "mode": self.mode,
+                "balance_activity": self.balance_activity,
+            }
+            for days in range(1, 6)
+        ]
+        return pd.DataFrame(rows, columns=_CSV_COLUMNS)
+
+    @classmethod
+    def from_dataframe(cls, df: pd.DataFrame) -> "PlanningRules":
+        if df.empty or "active_days" not in df.columns:
+            return cls()
+        target_machines: dict[int, int] = {}
+        target_presential: dict[int, int] = {}
+        # Backwards-compat: older CSVs used max_machines / max_presential
+        # (or min_machines / min_presential as the soft objective).
+        machines_col = (
+            "target_machines" if "target_machines" in df.columns
+            else "max_machines" if "max_machines" in df.columns
+            else "min_machines" if "min_machines" in df.columns
+            else None
+        )
+        presential_col = (
+            "target_presential" if "target_presential" in df.columns
+            else "max_presential" if "max_presential" in df.columns
+            else "min_presential" if "min_presential" in df.columns
+            else None
+        )
+        for row in df.itertuples(index=False):
+            days = int(getattr(row, "active_days"))
+            if machines_col is not None:
+                target_machines[days] = int(getattr(row, machines_col))
+            if presential_col is not None:
+                target_presential[days] = int(getattr(row, presential_col))
+        if not target_machines:
+            target_machines = dict(_DEFAULT_TARGET_MACHINES)
+        if not target_presential:
+            target_presential = dict(_DEFAULT_TARGET_PRESENTIAL)
+        # Mode: CSVs sense columna o amb valor invàlid → el per defecte
+        # («total», equilibrar per càrrega de feina setmanal).
+        mode = "total"
+        if "mode" in df.columns and not df["mode"].dropna().empty:
+            candidate = str(df["mode"].dropna().iloc[0]).strip().lower()
+            if candidate in RULE_MODES:
+                mode = candidate
+        balance_activity = ""
+        if (
+            "balance_activity" in df.columns
+            and not df["balance_activity"].dropna().empty
+        ):
+            balance_activity = (
+                str(df["balance_activity"].dropna().iloc[0]).strip().upper()
+            )
+            if balance_activity in {"NAN", "NONE"}:
+                balance_activity = ""
+        return cls(
+            target_machines=target_machines,
+            target_presential=target_presential,
+            mode=mode,
+            balance_activity=balance_activity,
+        )
+
+    def to_csv(self, path: Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.to_dataframe().to_csv(path, index=False)
+
+    @classmethod
+    def from_csv(cls, path: Path) -> "PlanningRules":
+        path = Path(path)
+        if not path.exists() or path.stat().st_size == 0:
+            return cls()
+        try:
+            return cls.from_dataframe(pd.read_csv(path))
+        except Exception as exc:
+            # Mai silenciós: unes regles corruptes farien planificar amb
+            # targets per defecte sense que ningú ho sabés.
+            import sys
+            print(
+                f"AVIS: {path} il·legible ({exc}); s'apliquen les regles "
+                "d'equilibri per defecte.",
+                file=sys.stderr,
+            )
+            return cls()
+
+    # ── convenience ────────────────────────────────────────────────────────────
+
+    @classmethod
+    def defaults(cls) -> "PlanningRules":
+        return cls()

@@ -1,0 +1,8 @@
+# PAC3_turnos — dependències directes (fixades a les versions en ús).
+# Instal·lació:  python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+streamlit==1.56.0
+pandas==3.0.2
+ortools==9.15.6755
+reportlab==4.4.10
+PyMuPDF==1.27.2.3
+openpyxl==3.1.5
